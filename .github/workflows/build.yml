@@ -21,8 +21,9 @@ jobs:
       run: |
         pip install gdown
         gdown 1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M -O samsung.zip
-        unzip samsung.zip kernel.tar.gz
-        tar -xf kernel.tar.gz
+        unzip samsung.zip
+        ls
+        find . -name "*.tar.gz" | head -5
 
     - name: Setup KernelSU
       run: |
