@@ -53,9 +53,9 @@ jobs:
         # 2. Clone simonpunk's SUSFS repo
         git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10
         
-        # 3. Apply Core Kernel SUSFS Patch
-        cp susfs4ksu/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch ./
-        patch -p1 --forward < 50_add_susfs_in_gki-android12-5.10.patch || echo "SUSFS core patch applied"
+        # 3. Apply Core Kernel SUSFS Patch (Fixed the path error!)
+        cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch ./
+        patch -p1 --forward < 50_add_susfs_in_gki-android12-5.10.patch || true
         
         # 4. Copy actual SUSFS Source Files
         cp susfs4ksu/kernel_patches/fs/* fs/
@@ -64,7 +64,7 @@ jobs:
         # 5. Patch KernelSU-Next to use SUSFS
         cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU-Next/
         cd KernelSU-Next
-        patch -p1 --forward < 10_enable_susfs_for_ksu.patch || echo "KSU-Next SUSFS patch applied"
+        patch -p1 --forward < 10_enable_susfs_for_ksu.patch || true
 
     - name: Lobotomize Samsung Security (Defex/RKP/Proca)
       run: |
