@@ -15,7 +15,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch
+        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils
 
     - name: Download and Extract Samsung Source
       run: |
@@ -23,10 +23,10 @@ jobs:
         gdown 1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M -O samsung.zip
         unzip samsung.zip
         tar -xf Kernel.tar.gz
+        tar -xf Platform.tar.gz
 
     - name: Setup KernelSU + SUSFS
       run: |
-        set -x
         sudo chmod -R 777 kernel_platform/common/
         cd kernel_platform/common
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
