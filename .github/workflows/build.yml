@@ -2,7 +2,7 @@ name: Build Fold4 Kernel (KSU-Next)
 
 on:
   push:
-    branches:[ main ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -10,69 +10,66 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils curl clang lld llvm
+        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils curl clang lld llvm build-essential
 
     - name: Download and Extract Samsung Source
       run: |
         pip install gdown
         gdown 1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M -O samsung.zip
         unzip samsung.zip
+        # Using -f to prevent prompts if files already exist
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
 
     - name: Setup Official Google Build Tools (Clang-r416183b)
       run: |
-        # Download exact Google Clang 12.0.5 required by Android 12-5.10
+        # Create directory and download Clang
         mkdir -p kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
-        cd kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
-        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz
-        tar -xf clang-r416183b.tar.gz
-        cd ../../../../../..
+        curl -LSs https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz -o clang.tar.gz
+        tar -xf clang.tar.gz -C kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
         
-        # SLEDGEHAMMER FIX: Link ALL system binaries so the hermetic environment doesn't break
+        # Link system binaries to satisfy hermetic build requirements
         mkdir -p kernel_platform/build/build-tools/path/linux-x86
         ln -sf /usr/bin/* kernel_platform/build/build-tools/path/linux-x86/ 2>/dev/null || true
         ln -sf /bin/* kernel_platform/build/build-tools/path/linux-x86/ 2>/dev/null || true
 
     - name: Setup KernelSU-Next
+      working-directory: kernel_platform/common
       run: |
-        # IMPORTANT: Make Samsung's read-only files writable!
-        sudo chmod -R 777 kernel_platform/common/
-        
-        cd kernel_platform/common
-        
-        # 1. Install KernelSU-Next (SUSFS removed temporarily to prevent hunk failures)
+        # Make files writable
+        chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
     - name: Lobotomize Samsung Security (Defex/RKP/Proca)
+      working-directory: kernel_platform/common/arch/arm64/configs
       run: |
-        cd kernel_platform/common/arch/arm64/configs
-        
-        sudo chmod 777 gki_defconfig || true
-        
-        # Turn off Samsung Security natively
+        chmod +w gki_defconfig
+        # Turn off Samsung Security
         sed -i 's/CONFIG_SECURITY_DEFEX=y/CONFIG_SECURITY_DEFEX=n/g' gki_defconfig
         sed -i 's/CONFIG_RKP=y/CONFIG_RKP=n/g' gki_defconfig
         sed -i 's/CONFIG_PROCA=y/CONFIG_PROCA=n/g' gki_defconfig
         sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' gki_defconfig
         
         # Ensure Kprobes is enabled for KSU
-        echo "CONFIG_KPROBES=y" >> gki_defconfig
-        echo "CONFIG_HAVE_KPROBES=y" >> gki_defconfig
-        echo "CONFIG_KPROBE_EVENTS=y" >> gki_defconfig
+        {
+          echo "CONFIG_KPROBES=y"
+          echo "CONFIG_HAVE_KPROBES=y"
+          echo "CONFIG_KPROBE_EVENTS=y"
+        } >> gki_defconfig
 
     - name: Build kernel
       run: |
         # Fix the mktemp missing directory warning
         mkdir -p out/target/product/q4q/
-        
-        chmod +x build_kernel_GKI.sh || true
-        bash build_kernel_GKI.sh
+        chmod +x build_kernel_GKI.sh
+        # Pathing might be strict, ensure the script is executed in the root or appropriate folder
+        ./build_kernel_GKI.sh
 
     - name: Upload kernel
       uses: actions/upload-artifact@v4
