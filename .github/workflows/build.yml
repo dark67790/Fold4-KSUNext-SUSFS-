@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
     - uses: actions/checkout@v4
@@ -15,7 +15,11 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils clang-12 lld-12 llvm-12
+        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils
+        wget https://apt.llvm.org/llvm.sh
+        chmod +x llvm.sh
+        sudo ./llvm.sh 12
+        sudo apt install -y clang-12 lld-12 llvm-12
 
     - name: Download and Extract Samsung Source
       run: |
@@ -41,9 +45,7 @@ jobs:
       run: |
         sudo chmod -R 777 kernel_platform/common/
         cd kernel_platform/common
-        # KernelSU-Next
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/main/kernel/setup.sh" | bash -
-        # SUSFS kernel patch
         wget -q https://raw.githubusercontent.com/simonpunk/susfs4ksu/main/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch
         patch -p1 --forward --reject-file=/dev/null < 50_add_susfs_in_gki-android12-5.10.patch || echo "SUSFS patch done"
 
