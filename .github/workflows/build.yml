@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next)
+name: Build Fold4 Kernel (KSU-Next NUKE)
 
 on:
   push:
@@ -34,37 +34,52 @@ jobs:
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
-    - name: Setup Hermetic Toolchain
+    - name: Download True Google Prebuilts (Fixes sys/types.h)
       run: |
-        # 1. Create the path the build script expects
+        cd kernel_platform
+        
+        # 1. Clang
+        mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
+        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz
+        tar -xf clang-r416183b.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
+        
+        # 2. GCC Host (CRITICAL: Provides sys/types.h and glibc sysroot)
+        mkdir -p prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
+        wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8/+archive/refs/tags/android-12.0.0_r34.tar.gz
+        tar -xf android-12.0.0_r34.tar.gz -C prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
+        
+        # 3. Kernel Build Tools
+        mkdir -p prebuilts/kernel-build-tools/linux-x86
+        wget -q https://android.googlesource.com/platform/prebuilts/kernel-build-tools/+archive/refs/tags/android-12.0.0_r34.tar.gz
+        tar -xf android-12.0.0_r34.tar.gz -C prebuilts/kernel-build-tools/linux-x86
+        
+        # 4. GAS Assembler
+        mkdir -p prebuilts/gas/linux-x86
+        wget -q https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/tags/android-12.0.0_r34.tar.gz
+        tar -xf android-12.0.0_r34.tar.gz -C prebuilts/gas/linux-x86
+
+    - name: Link Hermetic Path Safely
+      run: |
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
         
-        # 2. Link EVERYTHING from the system to the hermetic path
-        # This stops the "command not found" whack-a-mole for good.
+        # Safely symlink commands ONLY if they don't exist
         for dir in /bin /usr/bin /usr/local/bin; do
           for file in "$dir"/*; do
             if [ -x "$file" ] && [ ! -d "$file" ]; then
-              ln -sf "$file" "$TOOLS_DIR/$(basename "$file")" 2>/dev/null || true
+              cmd=$(basename "$file")
+              if [ ! -e "$TOOLS_DIR/$cmd" ]; then
+                ln -sf "$file" "$TOOLS_DIR/$cmd" 2>/dev/null || true
+              fi
             fi
           done
         done
-
-        # 3. Overwrite with our GCC/G++ wrappers (these must stay as wrappers)
+        
+        # Force GCC/G++ wrappers (must delete the symlinks first to avoid "Permission denied")
+        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
         printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/gcc "${args[@]}"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/g++ "${args[@]}"\n' > "$TOOLS_DIR/g++"
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-
-    - name: Clone Clang & GAS
-      run: |
-        # Using prebuilts-master as per your logs
-        CLANG_DIR=kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
-        mkdir -p $CLANG_DIR
-        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 $CLANG_DIR
-        
-        GAS_DIR=kernel_platform/prebuilts/gas/linux-x86
-        mkdir -p $GAS_DIR
-        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gas/linux-x86 $GAS_DIR
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -85,17 +100,13 @@ jobs:
 
     - name: Build
       run: |
-        # 1. Provide the MMRM symvers file required by build_kernel_GKI.sh
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         
-        # 2. Fix the build.sh to ensure it uses our host compiler fixes
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' kernel_platform/build/build.sh
         
-        # 3. Inject our tool path into the environment
         export PATH=$(pwd)/kernel_platform/build/build-tools/path/linux-x86:$PATH
         
-        # 4. Run the build
         bash build_kernel_GKI.sh
 
     - name: Upload Image
