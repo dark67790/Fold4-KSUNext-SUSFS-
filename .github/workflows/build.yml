@@ -41,29 +41,9 @@ jobs:
           tool=$(basename $f)
           [ ! -e "$TOOLS_PATH/$tool" ] && ln -sf $f $TOOLS_PATH/$tool 2>/dev/null || true
         done
-        cat > $TOOLS_PATH/gcc << 'EOF'
-#!/bin/bash
-args=()
-for arg in "$@"; do
-  case "$arg" in
-    --rtlib=*|--unwindlib=*) ;;
-    *) args+=("$arg") ;;
-  esac
-done
-exec /usr/bin/gcc "${args[@]}"
-EOF
+        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/gcc "${args[@]}"\n' > $TOOLS_PATH/gcc
         chmod +x $TOOLS_PATH/gcc
-        cat > $TOOLS_PATH/g++ << 'EOF'
-#!/bin/bash
-args=()
-for arg in "$@"; do
-  case "$arg" in
-    --rtlib=*|--unwindlib=*) ;;
-    *) args+=("$arg") ;;
-  esac
-done
-exec /usr/bin/g++ "${args[@]}"
-EOF
+        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/g++ "${args[@]}"\n' > $TOOLS_PATH/g++
         chmod +x $TOOLS_PATH/g++
 
     - name: Clone Google Clang Prebuilts
@@ -93,12 +73,7 @@ EOF
         sed -i 's/CONFIG_PROCA=y/CONFIG_PROCA=n/g' gki_defconfig
         sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' gki_defconfig
         sed -i 's/CONFIG_DEBUG_INFO_BTF=y/CONFIG_DEBUG_INFO_BTF=n/g' gki_defconfig
-        {
-          echo "CONFIG_KPROBES=y"
-          echo "CONFIG_HAVE_KPROBES=y"
-          echo "CONFIG_KPROBE_EVENTS=y"
-          echo "CONFIG_OVERLAY_FS=y"
-        } >> gki_defconfig
+        printf 'CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y\nCONFIG_OVERLAY_FS=y\n' >> gki_defconfig
 
     - name: Build kernel
       run: |
