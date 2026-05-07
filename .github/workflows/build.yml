@@ -46,6 +46,18 @@ jobs:
           https://android.googlesource.com/platform/prebuilts/gas/linux-x86 \
           kernel_platform/prebuilts/gas/linux-x86
 
+    - name: Populate build-tools path
+      run: |
+        mkdir -p kernel_platform/build/build-tools/path/linux-x86
+        for tool in nproc readlink sed tr make sh bash python3 python \
+          grep awk find xargs zip unzip which printf diff head tail \
+          cat ls cp mv rm mkdir touch chmod ln stat wc cut sort date \
+          id expr tee true false; do
+          tp=$(which $tool 2>/dev/null)
+          [ -n "$tp" ] && ln -sf "$tp" \
+            kernel_platform/build/build-tools/path/linux-x86/$tool
+        done
+
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
       run: |
