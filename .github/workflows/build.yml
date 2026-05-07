@@ -41,6 +41,30 @@ jobs:
           tool=$(basename $f)
           [ ! -e "$TOOLS_PATH/$tool" ] && ln -sf $f $TOOLS_PATH/$tool 2>/dev/null || true
         done
+        cat > $TOOLS_PATH/gcc << 'EOF'
+#!/bin/bash
+args=()
+for arg in "$@"; do
+  case "$arg" in
+    --rtlib=*|--unwindlib=*) ;;
+    *) args+=("$arg") ;;
+  esac
+done
+exec /usr/bin/gcc "${args[@]}"
+EOF
+        chmod +x $TOOLS_PATH/gcc
+        cat > $TOOLS_PATH/g++ << 'EOF'
+#!/bin/bash
+args=()
+for arg in "$@"; do
+  case "$arg" in
+    --rtlib=*|--unwindlib=*) ;;
+    *) args+=("$arg") ;;
+  esac
+done
+exec /usr/bin/g++ "${args[@]}"
+EOF
+        chmod +x $TOOLS_PATH/g++
 
     - name: Clone Google Clang Prebuilts
       run: |
