@@ -22,18 +22,14 @@ jobs:
         pip install gdown
         gdown 1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M -O samsung.zip
         unzip samsung.zip
-        find . -name "kernel.tar.gz" | head -5
-        tar -xf $(find . -name "kernel.tar.gz" | head -1)
-        echo "=== ROOT STRUCTURE ==="
+        tar -xf Kernel.tar.gz
         ls -la
-        echo "=== KERNEL PLATFORM ==="
-        ls kernel_platform/ 2>/dev/null || echo "kernel_platform not found"
+        ls kernel_platform/
 
     - name: Setup KernelSU + SUSFS
       run: |
         cd kernel_platform/common
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-        # Apply susfs patches
         git clone https://github.com/simonpunk/susfs4ksu susfs_src
         patch -p1 < susfs_src/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch
 
