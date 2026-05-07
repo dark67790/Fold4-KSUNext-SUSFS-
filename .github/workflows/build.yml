@@ -23,7 +23,7 @@ jobs:
       run: |
         sudo apt update
         sudo apt install -y bc bison flex libssl-dev libelf-dev \
-          python3-pip unzip git patch coreutils curl build-essential cpio
+          python3-pip unzip git patch coreutils curl build-essential cpio wget
 
     - name: Download and Extract Samsung Source
       run: |
@@ -34,48 +34,45 @@ jobs:
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
-    - name: Download True Google Prebuilts (Fixes sys/types.h)
+    - name: Download Google Prebuilts (Corrected Git Clone)
       run: |
         cd kernel_platform
         
-        # 1. Clang
-        mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
-        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz
-        tar -xf clang-r416183b.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
+        # 1. Clang (r416183b is a specific folder inside the clang repo)
+        # We clone the repo and then move the specific version into place
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 temp_clang
+        mkdir -p prebuilts-master/clang/host/linux-x86/
+        mv temp_clang/clang-r416183b prebuilts-master/clang/host/linux-x86/
+        rm -rf temp_clang
         
-        # 2. GCC Host (CRITICAL: Provides sys/types.h and glibc sysroot)
+        # 2. GCC Host (Provides sys/types.h and glibc sysroot)
         mkdir -p prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
-        wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8/+archive/refs/tags/android-12.0.0_r34.tar.gz
-        tar -xf android-12.0.0_r34.tar.gz -C prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8 prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
         
         # 3. Kernel Build Tools
         mkdir -p prebuilts/kernel-build-tools/linux-x86
-        wget -q https://android.googlesource.com/platform/prebuilts/kernel-build-tools/+archive/refs/tags/android-12.0.0_r34.tar.gz
-        tar -xf android-12.0.0_r34.tar.gz -C prebuilts/kernel-build-tools/linux-x86
+        git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools prebuilts/kernel-build-tools/linux-x86
         
         # 4. GAS Assembler
         mkdir -p prebuilts/gas/linux-x86
-        wget -q https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/tags/android-12.0.0_r34.tar.gz
-        tar -xf android-12.0.0_r34.tar.gz -C prebuilts/gas/linux-x86
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gas/linux-x86 prebuilts/gas/linux-x86
 
     - name: Link Hermetic Path Safely
       run: |
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
         
-        # Safely symlink commands ONLY if they don't exist
+        # Link system binaries
         for dir in /bin /usr/bin /usr/local/bin; do
           for file in "$dir"/*; do
             if [ -x "$file" ] && [ ! -d "$file" ]; then
               cmd=$(basename "$file")
-              if [ ! -e "$TOOLS_DIR/$cmd" ]; then
-                ln -sf "$file" "$TOOLS_DIR/$cmd" 2>/dev/null || true
-              fi
+              [ ! -e "$TOOLS_DIR/$cmd" ] && ln -sf "$file" "$TOOLS_DIR/$cmd" 2>/dev/null || true
             fi
           done
         done
         
-        # Force GCC/G++ wrappers (must delete the symlinks first to avoid "Permission denied")
+        # Force GCC/G++ wrappers to fix --rtlib issues
         rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
         printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/gcc "${args[@]}"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/g++ "${args[@]}"\n' > "$TOOLS_DIR/g++"
@@ -100,11 +97,14 @@ jobs:
 
     - name: Build
       run: |
+        # Fix for MMRM driver requirements
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         
+        # Patch the build script to use system host compilers for host tools
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' kernel_platform/build/build.sh
         
+        # Add our custom tool path to the environment
         export PATH=$(pwd)/kernel_platform/build/build-tools/path/linux-x86:$PATH
         
         bash build_kernel_GKI.sh
