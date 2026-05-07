@@ -15,11 +15,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils
-        wget https://apt.llvm.org/llvm.sh
-        chmod +x llvm.sh
-        sudo ./llvm.sh 12
-        sudo apt install -y clang-12 lld-12 llvm-12
+        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils clang lld llvm
 
     - name: Download and Extract Samsung Source
       run: |
@@ -36,9 +32,8 @@ jobs:
           ln -sf $(which $cmd) kernel_platform/build/build-tools/path/linux-x86/$cmd 2>/dev/null || true
         done
         mkdir -p kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b/bin
-        for cmd in clang-12 clang++-12 llvm-ar-12 llvm-nm-12 llvm-objcopy-12 llvm-objdump-12 llvm-strip-12 ld.lld-12; do
-          base=$(echo $cmd | sed 's/-12//')
-          ln -sf $(which $cmd) kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b/bin/$base 2>/dev/null || true
+        for cmd in clang clang++ llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip ld.lld; do
+          ln -sf $(which $cmd) kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b/bin/$cmd 2>/dev/null || true
         done
 
     - name: Setup KernelSU-Next + SUSFS
