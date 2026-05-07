@@ -36,23 +36,28 @@ jobs:
 
     - name: Setup Hermetic Toolchain
       run: |
+        # 1. Create the path the build script expects
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
         
-        # Link basic utilities
-        SYMLINKS=(nproc readlink sed tr cut ls grep awk make expr find basename dirname cp mkdir rm tar env)
-        for tool in "${SYMLINKS[@]}"; do
-          ln -sf $(which $tool) "$TOOLS_DIR/$tool"
+        # 2. Link EVERYTHING from the system to the hermetic path
+        # This stops the "command not found" whack-a-mole for good.
+        for dir in /bin /usr/bin /usr/local/bin; do
+          for file in "$dir"/*; do
+            if [ -x "$file" ] && [ ! -d "$file" ]; then
+              ln -sf "$file" "$TOOLS_DIR/$(basename "$file")" 2>/dev/null || true
+            fi
+          done
         done
 
-        # Create GCC/G++ wrappers using printf to avoid YAML indentation errors
+        # 3. Overwrite with our GCC/G++ wrappers (these must stay as wrappers)
         printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/gcc "${args[@]}"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/g++ "${args[@]}"\n' > "$TOOLS_DIR/g++"
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
 
     - name: Clone Clang & GAS
       run: |
-        # Match the path 'prebuilts-master' from your logs
+        # Using prebuilts-master as per your logs
         CLANG_DIR=kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
         mkdir -p $CLANG_DIR
         git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 $CLANG_DIR
@@ -80,15 +85,15 @@ jobs:
 
     - name: Build
       run: |
-        # 1. Provide the MMRM symvers file required by your build_kernel_GKI.sh (line 21)
+        # 1. Provide the MMRM symvers file required by build_kernel_GKI.sh
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         
-        # 2. Add our custom tools to the PATH
-        export PATH=$(pwd)/kernel_platform/build/build-tools/path/linux-x86:$PATH
-        
-        # 3. Fix the build.sh to use our host compiler wrappers
+        # 2. Fix the build.sh to ensure it uses our host compiler fixes
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' kernel_platform/build/build.sh
+        
+        # 3. Inject our tool path into the environment
+        export PATH=$(pwd)/kernel_platform/build/build-tools/path/linux-x86:$PATH
         
         # 4. Run the build
         bash build_kernel_GKI.sh
