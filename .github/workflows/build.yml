@@ -10,23 +10,20 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout code
+    - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Maximize Build Space
+    - name: Free disk space
       run: |
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /opt/ghc
-        sudo rm -rf "/usr/local/share/boost"
-        sudo rm -rf /usr/lib/jvm
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm
         df -h
 
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch \
-        coreutils curl clang lld llvm build-essential gcc gcc-multilib libcap-dev binutils
+        sudo apt install -y bc bison flex libssl-dev libelf-dev \
+          python3-pip unzip git patch coreutils curl build-essential
 
     - name: Download and Extract Samsung Source
       run: |
@@ -37,17 +34,26 @@ jobs:
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
-    - name: Setup Google Clang and Build Tools
+    - name: Clone Google Clang Prebuilts
       run: |
-        CLANG_DIR="kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b"
-        mkdir -p "$CLANG_DIR"
-        curl -LSs https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz -o clang.tar.gz
-        tar -xf clang.tar.gz -C "$CLANG_DIR"
-        rm clang.tar.gz
-        TOOL_PATH="kernel_platform/build/build-tools/path/linux-x86"
-        mkdir -p "$TOOL_PATH"
-        ln -sf /usr/bin/* "$TOOL_PATH/" 2>/dev/null || true
-        ln -sf /bin/* "$TOOL_PATH/" 2>/dev/null || true
+        git clone --depth=1 \
+          https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+          kernel_platform/prebuilts-master/clang/host/linux-x86
+
+    - name: Clone Google Build Tools
+      run: |
+        git clone --depth=1 --filter=blob:none --sparse \
+          https://android.googlesource.com/platform/prebuilts/build-tools \
+          kernel_platform/build/build-tools
+        cd kernel_platform/build/build-tools
+        git sparse-checkout set path/linux-x86
+        git checkout
+
+    - name: Clone GAS Assembler
+      run: |
+        git clone --depth=1 \
+          https://android.googlesource.com/platform/prebuilts/gas/linux-x86 \
+          kernel_platform/prebuilts/gas/linux-x86
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -74,10 +80,7 @@ jobs:
     - name: Build kernel
       run: |
         mkdir -p out/target/product/q4q/
-        sed -i 's/make LLVM=1 LLVM_IAS=1/make HOSTCC=gcc HOSTCXX=g++ HOSTLD=ld LLVM=1 LLVM_IAS=1/g' \
-          kernel_platform/build/build.sh
-        chmod +x build_kernel_GKI.sh
-        ./build_kernel_GKI.sh
+        bash build_kernel_GKI.sh
 
     - name: Upload kernel
       uses: actions/upload-artifact@v4
