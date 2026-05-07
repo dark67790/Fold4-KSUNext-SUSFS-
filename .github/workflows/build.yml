@@ -26,11 +26,13 @@ jobs:
 
     - name: Setup KernelSU + SUSFS
       run: |
+        set -x
         sudo chmod -R 777 kernel_platform/common/
         cd kernel_platform/common
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-        wget -q https://api.github.com/repos/simonpunk/susfs4ksu/contents/kernel_patches/5.10 -O patches_list.json
-        cat patches_list.json | python3 -c "import sys,json; [print(f['name']) for f in json.load(sys.stdin)]"
+        wget -q https://api.github.com/repos/simonpunk/susfs4ksu/contents/kernel_patches/5.10 -O patches_list.json || echo "wget failed"
+        cat patches_list.json
+        python3 -c "import sys,json; [print(f['name']) for f in json.load(open('patches_list.json'))]" || echo "python failed"
 
     - name: Build kernel
       run: |
