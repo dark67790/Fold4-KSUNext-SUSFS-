@@ -37,14 +37,13 @@ jobs:
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
-    - name: Setup Official Google Build Tools (Clang-r416183b)
+    - name: Setup Google Clang and Build Tools
       run: |
         CLANG_DIR="kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b"
         mkdir -p "$CLANG_DIR"
         curl -LSs https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz -o clang.tar.gz
         tar -xf clang.tar.gz -C "$CLANG_DIR"
         rm clang.tar.gz
-
         TOOL_PATH="kernel_platform/build/build-tools/path/linux-x86"
         mkdir -p "$TOOL_PATH"
         ln -sf /usr/bin/* "$TOOL_PATH/" 2>/dev/null || true
@@ -75,11 +74,9 @@ jobs:
     - name: Build kernel
       run: |
         mkdir -p out/target/product/q4q/
+        sed -i 's/make LLVM=1 LLVM_IAS=1/make HOSTCC=gcc HOSTCXX=g++ HOSTLD=ld LLVM=1 LLVM_IAS=1/g' \
+          kernel_platform/build/build.sh
         chmod +x build_kernel_GKI.sh
-        export HOSTCC=gcc
-        export HOSTCXX=g++
-        export HOSTLD=ld
-        export HOSTCFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu"
         ./build_kernel_GKI.sh
 
     - name: Upload kernel
