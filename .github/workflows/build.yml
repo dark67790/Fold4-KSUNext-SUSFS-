@@ -37,8 +37,9 @@ jobs:
     - name: Fix missing build tools
       run: |
         TOOLS_PATH=kernel_platform/build/build-tools/path/linux-x86
-        for tool in nproc readlink sed tr; do
-          ln -sf $(which $tool) $TOOLS_PATH/$tool
+        for f in /usr/bin/* /bin/*; do
+          tool=$(basename $f)
+          [ ! -e "$TOOLS_PATH/$tool" ] && ln -sf $f $TOOLS_PATH/$tool 2>/dev/null || true
         done
 
     - name: Clone Google Clang Prebuilts
