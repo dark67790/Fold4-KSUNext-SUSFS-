@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next Endgame)
+name: Build Fold4 Kernel (KSU-Next Checkmate)
 
 on:
   push:
@@ -37,39 +37,42 @@ jobs:
     - name: Download Clang and GAS
       run: |
         cd kernel_platform
+        
+        # 1. Clang
         mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
         curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
         tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
         rm clang.tar.gz
         
+        # 2. GAS Assembler
         mkdir -p prebuilts/gas/linux-x86
         curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
         tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
         rm gas.tar.gz
 
-    - name: Force System Headers and Path
+    - name: Defeat Hermetic Environment
       run: |
+        # Make the build folder writable to avoid "Permission denied" errors
         chmod -R u+w kernel_platform/build
         
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
         
-        # Link every system tool to the hermetic path
+        # 1. Dump every Ubuntu executable into the Hermetic folder as a symlink
         find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
         
-        # GCC/G++ Wrappers to fix --rtlib and force Include Paths
+        # 2. Add our GCC/G++ wrappers to fix --rtlib errors
         rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-        
-        # The magic fix: we hardcode the include paths into the gcc wrapper
-        printf '#!/bin/bash\nexec /usr/bin/gcc -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
-        printf '#!/bin/bash\nexec /usr/bin/g++ -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
+        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/gcc "${args[@]}"\n' > "$TOOLS_DIR/gcc"
+        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/g++ "${args[@]}"\n' > "$TOOLS_DIR/g++"
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
 
-        # Patch _setup_env.sh to prevent it from wiping the environment
+        # 3. Aggressively patch Samsung's _setup_env.sh to ensure our system PATH survives
         if [ -f kernel_platform/build/_setup_env.sh ]; then
-          echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
-          echo 'export C_INCLUDE_PATH=/usr/include:/usr/include/x86_64-linux-gnu' >> kernel_platform/build/_setup_env.sh
-          echo 'export CPLUS_INCLUDE_PATH=/usr/include:/usr/include/x86_64-linux-gnu' >> kernel_platform/build/_setup_env.sh
+          echo 'export PATH=$PATH:/usr/bin:/bin:/usr/local/bin' >> kernel_platform/build/_setup_env.sh
+          # Unset HOSTCFLAGS and HOSTCXXFLAGS so the host GCC uses system headers
+          echo 'unset HOSTCFLAGS' >> kernel_platform/build/_setup_env.sh
+          echo 'unset HOSTCXXFLAGS' >> kernel_platform/build/_setup_env.sh
         fi
 
     - name: Setup KernelSU-Next
@@ -91,15 +94,12 @@ jobs:
 
     - name: Build
       run: |
-        # MMRM requirement
+        # Fix for MMRM driver requirements
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         
-        # Mktemp fix (from your log error)
-        mkdir -p out/target/product/q4q/
-        
-        # Force HOSTCC and include paths into build.sh
-        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' kernel_platform/build/build.sh
+        # Instruct build.sh to use our GCC wrappers for host tooling
+        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' kernel_platform/build/build.sh
         
         bash build_kernel_GKI.sh
 
