@@ -20,6 +20,7 @@ jobs:
         sudo rm -rf /opt/ghc
         sudo rm -rf "/usr/local/share/boost"
         sudo rm -rf /usr/lib/jvm
+        df -h
 
     - name: Install dependencies
       run: |
@@ -34,7 +35,7 @@ jobs:
         unzip samsung.zip
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
-        # Clean up zips to save space
+        # Clean up to save space
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
     - name: Setup Official Google Build Tools (Clang-r416183b)
@@ -46,14 +47,15 @@ jobs:
         tar -xf clang.tar.gz -C "$CLANG_DIR"
         rm clang.tar.gz
         
-        # SLEDGEHAMMER 2.0: Link system tools and HEADERS into the hermetic path
+        # Create the hermetic tool path
         TOOL_PATH="kernel_platform/build/build-tools/path/linux-x86"
         mkdir -p "$TOOL_PATH"
+        
+        # Link system binaries
         ln -sf /usr/bin/* "$TOOL_PATH/" 2>/dev/null || true
         ln -sf /bin/* "$TOOL_PATH/" 2>/dev/null || true
         
-        # The Fix for 'sys/types.h' not found:
-        # Link the runner's system headers into the build-tools directory
+        # FIX: Provide system headers to the hermetic environment
         ln -s /usr/include "$TOOL_PATH/include"
         mkdir -p "$TOOL_PATH/sys"
         ln -s /usr/include/x86_64-linux-gnu/sys/* "$TOOL_PATH/sys/" 2>/dev/null || true
@@ -68,23 +70,31 @@ jobs:
       working-directory: kernel_platform/common/arch/arm64/configs
       run: |
         chmod +w gki_defconfig
+        
+        # Disable Security Features
         sed -i 's/CONFIG_SECURITY_DEFEX=y/CONFIG_SECURITY_DEFEX=n/g' gki_defconfig
         sed -i 's/CONFIG_RKP=y/CONFIG_RKP=n/g' gki_defconfig
         sed -i 's/CONFIG_PROCA=y/CONFIG_PROCA=n/g' gki_defconfig
         sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' gki_defconfig
         
+        # Disable BTF to prevent link-time failures on Ubuntu runners
+        sed -i 's/CONFIG_DEBUG_INFO_BTF=y/CONFIG_DEBUG_INFO_BTF=n/g' gki_defconfig
+        
+        # Enable KSU requirements
         {
           echo "CONFIG_KPROBES=y"
           echo "CONFIG_HAVE_KPROBES=y"
           echo "CONFIG_KPROBE_EVENTS=y"
+          echo "CONFIG_OVERLAY_FS=y"
         } >> gki_defconfig
 
     - name: Build kernel
       run: |
+        # Fix the mktemp missing directory warning
         mkdir -p out/target/product/q4q/
         chmod +x build_kernel_GKI.sh
         
-        # Inject environment variables to help the compiler find the system headers
+        # Force the compiler to see the system headers we linked
         export HOSTCFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu"
         export C_INCLUDE_PATH="/usr/include:/usr/include/x86_64-linux-gnu"
         export CPLUS_INCLUDE_PATH="/usr/include:/usr/include/x86_64-linux-gnu"
