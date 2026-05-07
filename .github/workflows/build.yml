@@ -23,7 +23,7 @@ jobs:
       run: |
         sudo apt update
         sudo apt install -y bc bison flex libssl-dev libelf-dev \
-          python3-pip unzip git patch coreutils curl build-essential
+          python3-pip unzip git patch coreutils curl build-essential cpio
 
     - name: Download and Extract Samsung Source
       run: |
@@ -34,30 +34,56 @@ jobs:
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
-    - name: Fix missing build tools
+    - name: Setup Hermetic Toolchain
       run: |
-        TOOLS_PATH=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
-        mkdir -p "$TOOLS_PATH"
-        # Link essential tools instead of everything to avoid bloat/errors
-        for tool in nproc readlink sed tr cut ls grep awk make; do
-          ln -sf $(which $tool) "$TOOLS_PATH/$tool"
+        # This matches the path in your build.sh logs
+        TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
+        mkdir -p "$TOOLS_DIR"
+        
+        # Link the basic Linux utilities that build.sh expects to find in its "hermetic" PATH
+        SYMLINKS=(nproc readlink sed tr cut ls grep awk make expr find basename dirname shell cp mkdir rm tar)
+        for tool in "${SYMLINKS[@]}"; do
+          ln -sf $(which $tool) "$TOOLS_DIR/$tool"
         done
-        # Create wrappers to ignore Clang-specific flags passed to GCC/G++
-        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/gcc "${args[@]}"\n' > "$TOOLS_PATH/gcc"
-        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/g++ "${args[@]}"\n' > "$TOOLS_PATH/g++"
-        chmod +x "$TOOLS_PATH/gcc" "$TOOLS_PATH/g++"
 
-    - name: Clone Google Clang Prebuilts
+        # Create GCC/G++ wrappers to prevent build.sh from failing on Clang-specific flags
+        # We use absolute paths to the system compiler here
+        cat <<EOF > "$TOOLS_DIR/gcc"
+#!/bin/bash
+args=()
+for arg in "\$@"; do
+  case "\$arg" in
+    --rtlib=*|--unwindlib=*) ;;
+    *) args+=("\$arg") ;;
+  esac
+done
+exec /usr/bin/gcc "\${args[@]}"
+EOF
+
+        cat <<EOF > "$TOOLS_DIR/g++"
+#!/bin/bash
+args=()
+for arg in "\$@"; do
+  case "\$arg" in
+    --rtlib=*|--unwindlib=*) ;;
+    *) args+=("\$arg") ;;
+  esac
+done
+exec /usr/bin/g++ "\${args[@]}"
+EOF
+        chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
+
+    - name: Clone Clang & GAS
       run: |
-        # Your script specifically looks for clang-r416183b
+        # Aligning with the folder name 'prebuilts-master' seen in your error log
         CLANG_DIR=kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
         mkdir -p $CLANG_DIR
-        git clone --depth=1 -b master https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 $CLANG_DIR
-
-    - name: Clone GAS Assembler
-      run: |
-        mkdir -p kernel_platform/prebuilts/gas/linux-x86
-        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gas/linux-x86 kernel_platform/prebuilts/gas/linux-x86
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 $CLANG_DIR
+        
+        # Clone GAS
+        GAS_DIR=kernel_platform/prebuilts/gas/linux-x86
+        mkdir -p $GAS_DIR
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gas/linux-x86 $GAS_DIR
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -65,7 +91,7 @@ jobs:
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-    - name: Disable Samsung Security
+    - name: Patch Defconfig
       working-directory: kernel_platform/common/arch/arm64/configs
       run: |
         chmod +w gki_defconfig
@@ -74,19 +100,28 @@ jobs:
         sed -i 's/CONFIG_PROCA=y/CONFIG_PROCA=n/g' gki_defconfig
         sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' gki_defconfig
         sed -i 's/CONFIG_DEBUG_INFO_BTF=y/CONFIG_DEBUG_INFO_BTF=n/g' gki_defconfig
-        printf 'CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y\nCONFIG_OVERLAY_FS=y\n' >> gki_defconfig
+        {
+          echo "CONFIG_KPROBES=y"
+          echo "CONFIG_HAVE_KPROBES=y"
+          echo "CONFIG_KPROBE_EVENTS=y"
+          echo "CONFIG_OVERLAY_FS=y"
+        } >> gki_defconfig
 
-    - name: Build kernel
+    - name: Build
       run: |
-        # Inject custom HOSTCC into the build environment
+        # Add our custom tool folder to the start of the PATH
         export PATH=$(pwd)/kernel_platform/build/build-tools/path/linux-x86:$PATH
+        
+        # Fix for the techpack MMRM pathing
         mkdir -p out/target/product/q4q/
-        # Patch build.sh to ensure it doesn't override our toolchain fixes
+        
+        # Patch the build.sh HOSTCC call
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' kernel_platform/build/build.sh
+        
         bash build_kernel_GKI.sh
 
-    - name: Upload kernel
+    - name: Upload Image
       uses: actions/upload-artifact@v4
       with:
-        name: Samsung-Fold4-KSUNext-Image
-        path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image
+        name: Fold4-KSUNext-Image
+        path: out/msm-waipio-waipio-gki/dist/Image
