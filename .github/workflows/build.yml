@@ -26,6 +26,7 @@ jobs:
 
     - name: Setup KernelSU + SUSFS
       run: |
+        sudo chmod -R 777 kernel_platform/common/
         cd kernel_platform/common
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
         wget -q https://api.github.com/repos/simonpunk/susfs4ksu/contents/kernel_patches/5.10 -O patches_list.json
