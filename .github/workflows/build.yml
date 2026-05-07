@@ -36,27 +36,28 @@ jobs:
 
     - name: Fix missing build tools
       run: |
-        TOOLS_PATH=kernel_platform/build/build-tools/path/linux-x86
-        for f in /usr/bin/* /bin/*; do
-          tool=$(basename $f)
-          [ ! -e "$TOOLS_PATH/$tool" ] && ln -sf $f $TOOLS_PATH/$tool 2>/dev/null || true
+        TOOLS_PATH=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
+        mkdir -p "$TOOLS_PATH"
+        # Link essential tools instead of everything to avoid bloat/errors
+        for tool in nproc readlink sed tr cut ls grep awk make; do
+          ln -sf $(which $tool) "$TOOLS_PATH/$tool"
         done
-        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/gcc "${args[@]}"\n' > $TOOLS_PATH/gcc
-        chmod +x $TOOLS_PATH/gcc
-        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/g++ "${args[@]}"\n' > $TOOLS_PATH/g++
-        chmod +x $TOOLS_PATH/g++
+        # Create wrappers to ignore Clang-specific flags passed to GCC/G++
+        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/gcc "${args[@]}"\n' > "$TOOLS_PATH/gcc"
+        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/g++ "${args[@]}"\n' > "$TOOLS_PATH/g++"
+        chmod +x "$TOOLS_PATH/gcc" "$TOOLS_PATH/g++"
 
     - name: Clone Google Clang Prebuilts
       run: |
-        git clone --depth=1 \
-          https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-          kernel_platform/prebuilts-master/clang/host/linux-x86
+        # Your script specifically looks for clang-r416183b
+        CLANG_DIR=kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
+        mkdir -p $CLANG_DIR
+        git clone --depth=1 -b master https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 $CLANG_DIR
 
     - name: Clone GAS Assembler
       run: |
-        git clone --depth=1 \
-          https://android.googlesource.com/platform/prebuilts/gas/linux-x86 \
-          kernel_platform/prebuilts/gas/linux-x86
+        mkdir -p kernel_platform/prebuilts/gas/linux-x86
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gas/linux-x86 kernel_platform/prebuilts/gas/linux-x86
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -77,9 +78,11 @@ jobs:
 
     - name: Build kernel
       run: |
+        # Inject custom HOSTCC into the build environment
+        export PATH=$(pwd)/kernel_platform/build/build-tools/path/linux-x86:$PATH
         mkdir -p out/target/product/q4q/
-        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' \
-          kernel_platform/build/build.sh
+        # Patch build.sh to ensure it doesn't override our toolchain fixes
+        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' kernel_platform/build/build.sh
         bash build_kernel_GKI.sh
 
     - name: Upload kernel
