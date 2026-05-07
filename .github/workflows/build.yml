@@ -79,8 +79,8 @@ jobs:
     - name: Build kernel
       run: |
         mkdir -p out/target/product/q4q/
-        sed -i 's/HOSTCC=clang/HOSTCC=gcc/' kernel_platform/build/build.sh
-        sed -i 's/HOSTCXX=clang++/HOSTCXX=g++/' kernel_platform/build/build.sh
+        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' \
+          kernel_platform/build/build.sh
         bash build_kernel_GKI.sh
 
     - name: Upload kernel
