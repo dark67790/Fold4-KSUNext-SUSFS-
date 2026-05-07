@@ -42,6 +42,9 @@ jobs:
 
     - name: Setup KernelSU-Next + SUSFS
       run: |
+        # IMPORTANT: Make Samsung's read-only files writable!
+        sudo chmod -R 777 kernel_platform/common/
+        
         cd kernel_platform/common
         
         # 1. Install KernelSU-Next (Fixed 404: Branch is 'next')
@@ -66,6 +69,9 @@ jobs:
     - name: Lobotomize Samsung Security (Defex/RKP/Proca)
       run: |
         cd kernel_platform/common/arch/arm64/configs
+        
+        # Ensure defconfig is writable
+        sudo chmod 777 gki_defconfig || true
         
         # Turn off Samsung Security natively
         sed -i 's/CONFIG_SECURITY_DEFEX=y/CONFIG_SECURITY_DEFEX=n/g' gki_defconfig
