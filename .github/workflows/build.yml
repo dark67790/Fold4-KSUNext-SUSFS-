@@ -34,28 +34,33 @@ jobs:
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
-    - name: Download Google Prebuilts (Corrected Git Clone)
+    - name: Download Google Prebuilts (Archive Fix)
       run: |
         cd kernel_platform
         
-        # 1. Clang (r416183b is a specific folder inside the clang repo)
-        # We clone the repo and then move the specific version into place
-        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 temp_clang
-        mkdir -p prebuilts-master/clang/host/linux-x86/
-        mv temp_clang/clang-r416183b prebuilts-master/clang/host/linux-x86/
-        rm -rf temp_clang
+        # 1. Clang (Using specific commit hash to ensure r416183b is found)
+        mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
+        curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
+        tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
+        rm clang.tar.gz
         
-        # 2. GCC Host (Provides sys/types.h and glibc sysroot)
+        # 2. GCC Host (Fixes sys/types.h)
         mkdir -p prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
-        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8 prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
+        curl -LSs "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8/+archive/refs/heads/master.tar.gz" -o gcc_host.tar.gz
+        tar -xzf gcc_host.tar.gz -C prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
+        rm gcc_host.tar.gz
         
         # 3. Kernel Build Tools
         mkdir -p prebuilts/kernel-build-tools/linux-x86
-        git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools prebuilts/kernel-build-tools/linux-x86
+        curl -LSs "https://android.googlesource.com/kernel/prebuilts/build-tools/+archive/refs/heads/master.tar.gz" -o build_tools.tar.gz
+        tar -xzf build_tools.tar.gz -C prebuilts/kernel-build-tools/linux-x86
+        rm build_tools.tar.gz
         
         # 4. GAS Assembler
         mkdir -p prebuilts/gas/linux-x86
-        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gas/linux-x86 prebuilts/gas/linux-x86
+        curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
+        tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
+        rm gas.tar.gz
 
     - name: Link Hermetic Path Safely
       run: |
@@ -72,7 +77,7 @@ jobs:
           done
         done
         
-        # Force GCC/G++ wrappers to fix --rtlib issues
+        # Overwrite with our custom GCC/G++ wrappers to fix --rtlib issues
         rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
         printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/gcc "${args[@]}"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/g++ "${args[@]}"\n' > "$TOOLS_DIR/g++"
@@ -97,14 +102,14 @@ jobs:
 
     - name: Build
       run: |
-        # Fix for MMRM driver requirements
+        # Match the MMRM pathing expected in your build_kernel_GKI.sh
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         
-        # Patch the build script to use system host compilers for host tools
+        # Patch build.sh to use our wrappers for host tools
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' kernel_platform/build/build.sh
         
-        # Add our custom tool path to the environment
+        # Inject tool path
         export PATH=$(pwd)/kernel_platform/build/build-tools/path/linux-x86:$PATH
         
         bash build_kernel_GKI.sh
