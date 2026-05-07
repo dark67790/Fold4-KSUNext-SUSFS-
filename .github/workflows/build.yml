@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel
+name: Build Fold4 Kernel (KSU-Next + SUSFS)
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils clang lld llvm
+        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils curl clang lld llvm
 
     - name: Download and Extract Samsung Source
       run: |
@@ -25,31 +25,61 @@ jobs:
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
 
-    - name: Setup build tools
+    - name: Setup Official Google Build Tools (Clang-r416183b)
       run: |
-        mkdir -p kernel_platform/build/build-tools/path/linux-x86
-        for cmd in nproc readlink sed tr make sh bash python3 grep awk find xargs zip unzip; do
-          ln -sf $(which $cmd) kernel_platform/build/build-tools/path/linux-x86/$cmd 2>/dev/null || true
-        done
-        mkdir -p kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b/bin
-        for cmd in clang clang++ llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip ld.lld; do
-          ln -sf $(which $cmd) kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b/bin/$cmd 2>/dev/null || true
-        done
+        # Download exact Google Clang 12.0.5 required by Android 12-5.10
+        mkdir -p kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
+        cd kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
+        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz
+        tar -xf clang-r416183b.tar.gz
+        cd ../../../../../..
 
     - name: Setup KernelSU-Next + SUSFS
       run: |
-        sudo chmod -R 777 kernel_platform/common/
         cd kernel_platform/common
+        
+        # 1. Install KernelSU-Next
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/main/kernel/setup.sh" | bash -
-        wget -q https://raw.githubusercontent.com/simonpunk/susfs4ksu/main/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch
-        patch -p1 --forward --reject-file=/dev/null < 50_add_susfs_in_gki-android12-5.10.patch || echo "SUSFS patch done"
+        
+        # 2. Clone simonpunk's SUSFS repo
+        git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10
+        
+        # 3. Apply Core Kernel SUSFS Patch
+        cp susfs4ksu/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch ./
+        patch -p1 --forward < 50_add_susfs_in_gki-android12-5.10.patch || echo "SUSFS core patch applied"
+        
+        # 4. Copy actual SUSFS Source Files
+        cp susfs4ksu/kernel_patches/fs/* fs/
+        cp susfs4ksu/kernel_patches/include/linux/* include/linux/
+        
+        # 5. Patch KernelSU-Next to use SUSFS
+        cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU-Next/
+        cd KernelSU-Next
+        patch -p1 --forward < 10_enable_susfs_for_ksu.patch || echo "KSU-Next SUSFS patch applied"
+
+    - name: Lobotomize Samsung Security (Defex/RKP/Proca)
+      run: |
+        cd kernel_platform/common/arch/arm64/configs
+        
+        # Turn off Samsung Security natively
+        sed -i 's/CONFIG_SECURITY_DEFEX=y/CONFIG_SECURITY_DEFEX=n/g' gki_defconfig
+        sed -i 's/CONFIG_RKP=y/CONFIG_RKP=n/g' gki_defconfig
+        sed -i 's/CONFIG_PROCA=y/CONFIG_PROCA=n/g' gki_defconfig
+        sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' gki_defconfig
+        
+        # Ensure Kprobes is enabled for KSU
+        echo "CONFIG_KPROBES=y" >> gki_defconfig
+        echo "CONFIG_HAVE_KPROBES=y" >> gki_defconfig
+        echo "CONFIG_KPROBE_EVENTS=y" >> gki_defconfig
 
     - name: Build kernel
       run: |
+        # Make sure build script has execution rights
+        chmod +x build_kernel_GKI.sh
         bash build_kernel_GKI.sh
 
     - name: Upload kernel
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-Image
+        name: Samsung-Fold4-KSU-Next-SUSFS
         path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image
