@@ -30,33 +30,30 @@ jobs:
         pip install gdown
         gdown 1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M -O samsung.zip
         unzip samsung.zip
-        # Extract Samsung's source drops
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
     - name: Setup Google Hermetic Build Environment
       run: |
-        # 1. Google Clang 12.0.5 Toolchain
-        # We use sparse-checkout to get ONLY the clang-r416183b folder efficiently
+        # 1. Google Clang 12.0.5 Toolchain (Using sparse checkout for reliability)
         mkdir -p kernel_platform/prebuilts/clang/host/linux-x86
         git clone --depth 1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 kernel_platform/prebuilts/clang/host/linux-x86
         cd kernel_platform/prebuilts/clang/host/linux-x86
         git sparse-checkout set clang-r416183b
         cd ../../../../../..
 
-        # 2. Google Kernel Build Tools (Fixed Namespace)
-        # Note: In GKI, this moved to the 'kernel/' namespace
+        # 2. Google Kernel Build Tools (This one is in the 'kernel/' namespace)
         rm -rf kernel_platform/prebuilts/kernel-build-tools
         git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools kernel_platform/prebuilts/kernel-build-tools
 
-        # 3. Google GLIBC Sysroot (Standard AOSP path)
+        # 3. Google GLIBC Sysroot (This one is in the 'platform/' namespace)
         mkdir -p kernel_platform/prebuilts/gcc/linux-x86/host
         git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8 kernel_platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
 
-        # 4. Google GAS Assembler (Fixed Namespace)
+        # 4. Google GAS Assembler (This one is also in the 'platform/' namespace)
         mkdir -p kernel_platform/prebuilts/gas/linux-x86
-        git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/gas/linux-x86 kernel_platform/prebuilts/gas/linux-x86
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gas/linux-x86 kernel_platform/prebuilts/gas/linux-x86
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -82,7 +79,7 @@ jobs:
 
     - name: Build kernel
       run: |
-        # Explicitly add prebuilt tools to the path to ensure the build script finds them
+        # Ensure the build tools and clang are in the PATH
         export PATH=$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/bin:$PATH
         export PATH=$(pwd)/kernel_platform/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$PATH
         
