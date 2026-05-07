@@ -40,15 +40,6 @@ jobs:
           https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
           kernel_platform/prebuilts-master/clang/host/linux-x86
 
-    - name: Clone Google Build Tools
-      run: |
-        git clone --depth=1 --filter=blob:none --sparse \
-          https://android.googlesource.com/platform/prebuilts/build-tools \
-          kernel_platform/build/build-tools
-        cd kernel_platform/build/build-tools
-        git sparse-checkout set path/linux-x86
-        git checkout
-
     - name: Clone GAS Assembler
       run: |
         git clone --depth=1 \
