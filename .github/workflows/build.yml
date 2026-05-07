@@ -36,51 +36,27 @@ jobs:
 
     - name: Setup Hermetic Toolchain
       run: |
-        # This matches the path in your build.sh logs
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
         
-        # Link the basic Linux utilities that build.sh expects to find in its "hermetic" PATH
-        SYMLINKS=(nproc readlink sed tr cut ls grep awk make expr find basename dirname shell cp mkdir rm tar)
+        # Link basic utilities
+        SYMLINKS=(nproc readlink sed tr cut ls grep awk make expr find basename dirname cp mkdir rm tar env)
         for tool in "${SYMLINKS[@]}"; do
           ln -sf $(which $tool) "$TOOLS_DIR/$tool"
         done
 
-        # Create GCC/G++ wrappers to prevent build.sh from failing on Clang-specific flags
-        # We use absolute paths to the system compiler here
-        cat <<EOF > "$TOOLS_DIR/gcc"
-#!/bin/bash
-args=()
-for arg in "\$@"; do
-  case "\$arg" in
-    --rtlib=*|--unwindlib=*) ;;
-    *) args+=("\$arg") ;;
-  esac
-done
-exec /usr/bin/gcc "\${args[@]}"
-EOF
-
-        cat <<EOF > "$TOOLS_DIR/g++"
-#!/bin/bash
-args=()
-for arg in "\$@"; do
-  case "\$arg" in
-    --rtlib=*|--unwindlib=*) ;;
-    *) args+=("\$arg") ;;
-  esac
-done
-exec /usr/bin/g++ "\${args[@]}"
-EOF
+        # Create GCC/G++ wrappers using printf to avoid YAML indentation errors
+        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/gcc "${args[@]}"\n' > "$TOOLS_DIR/gcc"
+        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/g++ "${args[@]}"\n' > "$TOOLS_DIR/g++"
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
 
     - name: Clone Clang & GAS
       run: |
-        # Aligning with the folder name 'prebuilts-master' seen in your error log
+        # Match the path 'prebuilts-master' from your logs
         CLANG_DIR=kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
         mkdir -p $CLANG_DIR
         git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 $CLANG_DIR
         
-        # Clone GAS
         GAS_DIR=kernel_platform/prebuilts/gas/linux-x86
         mkdir -p $GAS_DIR
         git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gas/linux-x86 $GAS_DIR
@@ -100,24 +76,21 @@ EOF
         sed -i 's/CONFIG_PROCA=y/CONFIG_PROCA=n/g' gki_defconfig
         sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' gki_defconfig
         sed -i 's/CONFIG_DEBUG_INFO_BTF=y/CONFIG_DEBUG_INFO_BTF=n/g' gki_defconfig
-        {
-          echo "CONFIG_KPROBES=y"
-          echo "CONFIG_HAVE_KPROBES=y"
-          echo "CONFIG_KPROBE_EVENTS=y"
-          echo "CONFIG_OVERLAY_FS=y"
-        } >> gki_defconfig
+        printf 'CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y\nCONFIG_OVERLAY_FS=y\n' >> gki_defconfig
 
     - name: Build
       run: |
-        # Add our custom tool folder to the start of the PATH
+        # 1. Provide the MMRM symvers file required by your build_kernel_GKI.sh (line 21)
+        mkdir -p out/vendor/qcom/opensource/mmrm-driver/
+        touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
+        
+        # 2. Add our custom tools to the PATH
         export PATH=$(pwd)/kernel_platform/build/build-tools/path/linux-x86:$PATH
         
-        # Fix for the techpack MMRM pathing
-        mkdir -p out/target/product/q4q/
-        
-        # Patch the build.sh HOSTCC call
+        # 3. Fix the build.sh to use our host compiler wrappers
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' kernel_platform/build/build.sh
         
+        # 4. Run the build
         bash build_kernel_GKI.sh
 
     - name: Upload Image
