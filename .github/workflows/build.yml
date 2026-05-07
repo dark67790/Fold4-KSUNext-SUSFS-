@@ -15,20 +15,27 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip
+        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch
 
     - name: Download and Extract Samsung Source
       run: |
         pip install gdown
         gdown 1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M -O samsung.zip
         unzip samsung.zip
-        ls
-        find . -name "*.tar.gz" | head -5
+        find . -name "kernel.tar.gz" | head -5
+        tar -xf $(find . -name "kernel.tar.gz" | head -1)
+        echo "=== ROOT STRUCTURE ==="
+        ls -la
+        echo "=== KERNEL PLATFORM ==="
+        ls kernel_platform/ 2>/dev/null || echo "kernel_platform not found"
 
-    - name: Setup KernelSU
+    - name: Setup KernelSU + SUSFS
       run: |
         cd kernel_platform/common
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+        # Apply susfs patches
+        git clone https://github.com/simonpunk/susfs4ksu susfs_src
+        patch -p1 < susfs_src/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch
 
     - name: Build kernel
       run: |
