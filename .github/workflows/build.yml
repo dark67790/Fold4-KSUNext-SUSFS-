@@ -13,36 +13,54 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Maximize Build Space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "/usr/local/share/boost"
+        sudo rm -rf /usr/lib/jvm
+
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils curl clang lld llvm build-essential
+        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch \
+        coreutils curl clang lld llvm build-essential gcc-multilib libcap-dev
 
     - name: Download and Extract Samsung Source
       run: |
         pip install gdown
         gdown 1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M -O samsung.zip
         unzip samsung.zip
-        # Using -f to prevent prompts if files already exist
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
+        # Clean up zips to save space
+        rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
     - name: Setup Official Google Build Tools (Clang-r416183b)
       run: |
-        # Create directory and download Clang
-        mkdir -p kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
+        # Setup Clang path
+        CLANG_DIR="kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b"
+        mkdir -p "$CLANG_DIR"
         curl -LSs https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz -o clang.tar.gz
-        tar -xf clang.tar.gz -C kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
+        tar -xf clang.tar.gz -C "$CLANG_DIR"
+        rm clang.tar.gz
         
-        # Link system binaries to satisfy hermetic build requirements
-        mkdir -p kernel_platform/build/build-tools/path/linux-x86
-        ln -sf /usr/bin/* kernel_platform/build/build-tools/path/linux-x86/ 2>/dev/null || true
-        ln -sf /bin/* kernel_platform/build/build-tools/path/linux-x86/ 2>/dev/null || true
+        # SLEDGEHAMMER 2.0: Link system tools and HEADERS into the hermetic path
+        TOOL_PATH="kernel_platform/build/build-tools/path/linux-x86"
+        mkdir -p "$TOOL_PATH"
+        ln -sf /usr/bin/* "$TOOL_PATH/" 2>/dev/null || true
+        ln -sf /bin/* "$TOOL_PATH/" 2>/dev/null || true
+        
+        # The Fix for 'sys/types.h' not found:
+        # Link the runner's system headers into the build-tools directory
+        ln -s /usr/include "$TOOL_PATH/include"
+        mkdir -p "$TOOL_PATH/sys"
+        ln -s /usr/include/x86_64-linux-gnu/sys/* "$TOOL_PATH/sys/" 2>/dev/null || true
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
       run: |
-        # Make files writable
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
@@ -50,13 +68,11 @@ jobs:
       working-directory: kernel_platform/common/arch/arm64/configs
       run: |
         chmod +w gki_defconfig
-        # Turn off Samsung Security
         sed -i 's/CONFIG_SECURITY_DEFEX=y/CONFIG_SECURITY_DEFEX=n/g' gki_defconfig
         sed -i 's/CONFIG_RKP=y/CONFIG_RKP=n/g' gki_defconfig
         sed -i 's/CONFIG_PROCA=y/CONFIG_PROCA=n/g' gki_defconfig
         sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' gki_defconfig
         
-        # Ensure Kprobes is enabled for KSU
         {
           echo "CONFIG_KPROBES=y"
           echo "CONFIG_HAVE_KPROBES=y"
@@ -65,10 +81,14 @@ jobs:
 
     - name: Build kernel
       run: |
-        # Fix the mktemp missing directory warning
         mkdir -p out/target/product/q4q/
         chmod +x build_kernel_GKI.sh
-        # Pathing might be strict, ensure the script is executed in the root or appropriate folder
+        
+        # Inject environment variables to help the compiler find the system headers
+        export HOSTCFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu"
+        export C_INCLUDE_PATH="/usr/include:/usr/include/x86_64-linux-gnu"
+        export CPLUS_INCLUDE_PATH="/usr/include:/usr/include/x86_64-linux-gnu"
+        
         ./build_kernel_GKI.sh
 
     - name: Upload kernel
