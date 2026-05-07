@@ -1,0 +1,40 @@
+name: Build Fold4 Kernel
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip
+
+    - name: Download and Extract Samsung Source
+      run: |
+        pip install gdown
+        gdown 1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M -O samsung.zip
+        unzip samsung.zip kernel.tar.gz
+        tar -xf kernel.tar.gz
+
+    - name: Setup KernelSU
+      run: |
+        cd kernel_platform/common
+        curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+
+    - name: Build kernel
+      run: |
+        bash build_kernel_GKI.sh
+
+    - name: Upload kernel
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-Image
+        path: kernel_platform/out/msm-kernel-waipio/dist/Image
