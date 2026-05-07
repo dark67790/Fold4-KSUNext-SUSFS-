@@ -26,7 +26,7 @@ jobs:
       run: |
         sudo apt update
         sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch \
-        coreutils curl clang lld llvm build-essential gcc-multilib libcap-dev
+        coreutils curl clang lld llvm build-essential gcc gcc-multilib libcap-dev binutils
 
     - name: Download and Extract Samsung Source
       run: |
@@ -35,30 +35,20 @@ jobs:
         unzip samsung.zip
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
-        # Clean up to save space
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
     - name: Setup Official Google Build Tools (Clang-r416183b)
       run: |
-        # Setup Clang path
         CLANG_DIR="kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b"
         mkdir -p "$CLANG_DIR"
         curl -LSs https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz -o clang.tar.gz
         tar -xf clang.tar.gz -C "$CLANG_DIR"
         rm clang.tar.gz
-        
-        # Create the hermetic tool path
+
         TOOL_PATH="kernel_platform/build/build-tools/path/linux-x86"
         mkdir -p "$TOOL_PATH"
-        
-        # Link system binaries
         ln -sf /usr/bin/* "$TOOL_PATH/" 2>/dev/null || true
         ln -sf /bin/* "$TOOL_PATH/" 2>/dev/null || true
-        
-        # FIX: Provide system headers to the hermetic environment
-        ln -s /usr/include "$TOOL_PATH/include"
-        mkdir -p "$TOOL_PATH/sys"
-        ln -s /usr/include/x86_64-linux-gnu/sys/* "$TOOL_PATH/sys/" 2>/dev/null || true
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -66,21 +56,15 @@ jobs:
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-    - name: Lobotomize Samsung Security (Defex/RKP/Proca)
+    - name: Disable Samsung Security
       working-directory: kernel_platform/common/arch/arm64/configs
       run: |
         chmod +w gki_defconfig
-        
-        # Disable Security Features
         sed -i 's/CONFIG_SECURITY_DEFEX=y/CONFIG_SECURITY_DEFEX=n/g' gki_defconfig
         sed -i 's/CONFIG_RKP=y/CONFIG_RKP=n/g' gki_defconfig
         sed -i 's/CONFIG_PROCA=y/CONFIG_PROCA=n/g' gki_defconfig
         sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' gki_defconfig
-        
-        # Disable BTF to prevent link-time failures on Ubuntu runners
         sed -i 's/CONFIG_DEBUG_INFO_BTF=y/CONFIG_DEBUG_INFO_BTF=n/g' gki_defconfig
-        
-        # Enable KSU requirements
         {
           echo "CONFIG_KPROBES=y"
           echo "CONFIG_HAVE_KPROBES=y"
@@ -90,15 +74,12 @@ jobs:
 
     - name: Build kernel
       run: |
-        # Fix the mktemp missing directory warning
         mkdir -p out/target/product/q4q/
         chmod +x build_kernel_GKI.sh
-        
-        # Force the compiler to see the system headers we linked
+        export HOSTCC=gcc
+        export HOSTCXX=g++
+        export HOSTLD=ld
         export HOSTCFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu"
-        export C_INCLUDE_PATH="/usr/include:/usr/include/x86_64-linux-gnu"
-        export CPLUS_INCLUDE_PATH="/usr/include:/usr/include/x86_64-linux-gnu"
-        
         ./build_kernel_GKI.sh
 
     - name: Upload kernel
