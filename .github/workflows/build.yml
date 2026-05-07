@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next + SUSFS)
+name: Build Fold4 Kernel (KSU-Next + SUSFS Auto-Kang)
 
 on:
   push:
@@ -25,68 +25,96 @@ jobs:
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
 
-    - name: Setup Official Google Build Tools (Clang-r416183b)
+    - name: Setup Official Google Build Tools
       run: |
-        # Download exact Google Clang 12.0.5 required by Android 12-5.10
         mkdir -p kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
         cd kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
         wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz
         tar -xf clang-r416183b.tar.gz
         cd ../../../../../..
         
-        # Create symlinks for host tools that Samsung's GKI build script looks for
+        # Sledgehammer host tools fix
         mkdir -p kernel_platform/build/build-tools/path/linux-x86
-        for cmd in nproc readlink sed tr make sh bash python3 grep awk find xargs zip unzip; do
-          ln -sf $(which $cmd) kernel_platform/build/build-tools/path/linux-x86/$cmd 2>/dev/null || true
-        done
+        ln -sf /usr/bin/* kernel_platform/build/build-tools/path/linux-x86/ 2>/dev/null || true
+        ln -sf /bin/* kernel_platform/build/build-tools/path/linux-x86/ 2>/dev/null || true
+
+    - name: Clone the Kang Repository (BruhDudeWew)
+      run: |
+        # Clone the fixed Samsung 5.10.226 repo to a temp folder so we can steal his fixed files!
+        git clone --depth 1 https://github.com/BruhDudeWew/android_kernel_samsung_r0q.git /tmp/kang_repo
 
     - name: Setup KernelSU-Next + SUSFS
       run: |
-        # IMPORTANT: Make Samsung's read-only files writable!
+        # Make Samsung's read-only files writable
         sudo chmod -R 777 kernel_platform/common/
-        
         cd kernel_platform/common
         
-        # 1. Install KernelSU-Next (Fixed 404: Branch is 'next')
+        # 1. Install KernelSU-Next
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
         
         # 2. Clone simonpunk's SUSFS repo
         git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10
         
-        # 3. Apply Core Kernel SUSFS Patch (Fixed the path error!)
+        # 3. Apply the specific GitLab commit you found!
+        cd susfs4ksu
+        curl -LSs "https://gitlab.com/simonpunk/susfs4ksu/-/commit/f4379db3b7913ecbaf304472577a2a535ef57b8d.diff" | patch -p1 || true
+        cd ..
+        
+        # 4. Apply Core Kernel SUSFS Patch
         cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch ./
         patch -p1 --forward < 50_add_susfs_in_gki-android12-5.10.patch || true
         
-        # 4. Copy actual SUSFS Source Files
+        # ==========================================
+        # THE AUTO-KANG SCRIPT (Core Kernel)
+        # ==========================================
+        echo "Checking for Hunk Failures in core kernel..."
+        for rej in $(find . -name "*.rej"); do
+          target="${rej%.rej}"
+          clean_path="${target#./}"
+          echo "[!] Hunk failed on $clean_path. Kanging fixed file from BruhDudeWew..."
+          rm -f "$clean_path" "$rej"
+          # Steal the perfectly working file from the cloned repo
+          cp "/tmp/kang_repo/kernel_platform/common/$clean_path" "$clean_path"
+        done
+        
+        # 5. Copy actual SUSFS Source Files
         cp susfs4ksu/kernel_patches/fs/* fs/
         cp susfs4ksu/kernel_patches/include/linux/* include/linux/
         
-        # 5. Patch KernelSU-Next to use SUSFS
+        # 6. Patch KernelSU-Next to use SUSFS
         cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU-Next/
         cd KernelSU-Next
         patch -p1 --forward < 10_enable_susfs_for_ksu.patch || true
+        
+        # ==========================================
+        # THE AUTO-KANG SCRIPT (KernelSU-Next)
+        # ==========================================
+        echo "Checking for Hunk Failures in KernelSU-Next..."
+        for rej in $(find . -name "*.rej"); do
+          target="${rej%.rej}"
+          clean_path="${target#./}"
+          echo "[!] KSU Patch failed on $clean_path. Kanging fixed KSU file..."
+          rm -f "$clean_path" "$rej"
+          cp "/tmp/kang_repo/kernel_platform/common/KernelSU-Next/$clean_path" "$clean_path" || true
+        done
 
     - name: Lobotomize Samsung Security (Defex/RKP/Proca)
       run: |
         cd kernel_platform/common/arch/arm64/configs
-        
-        # Ensure defconfig is writable
         sudo chmod 777 gki_defconfig || true
         
-        # Turn off Samsung Security natively
         sed -i 's/CONFIG_SECURITY_DEFEX=y/CONFIG_SECURITY_DEFEX=n/g' gki_defconfig
         sed -i 's/CONFIG_RKP=y/CONFIG_RKP=n/g' gki_defconfig
         sed -i 's/CONFIG_PROCA=y/CONFIG_PROCA=n/g' gki_defconfig
         sed -i 's/CONFIG_KNOX_KAP=y/CONFIG_KNOX_KAP=n/g' gki_defconfig
         
-        # Ensure Kprobes is enabled for KSU
         echo "CONFIG_KPROBES=y" >> gki_defconfig
         echo "CONFIG_HAVE_KPROBES=y" >> gki_defconfig
         echo "CONFIG_KPROBE_EVENTS=y" >> gki_defconfig
 
     - name: Build kernel
       run: |
-        # Make sure build script has execution rights
+        mkdir -p out/target/product/q4q/
         chmod +x build_kernel_GKI.sh || true
         bash build_kernel_GKI.sh
 
