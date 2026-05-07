@@ -34,24 +34,26 @@ jobs:
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
-    - name: Clone Google Clang Prebuilts
+    - name: Setup Google Hermetic Build Environment
       run: |
-        git clone --depth=1 \
-          https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-          kernel_platform/prebuilts-master/clang/host/linux-x86
+        # 1. Google Clang 12.0.5 Toolchain
+        mkdir -p kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
+        cd kernel_platform/prebuilts-master/clang/host/linux-x86/clang-r416183b
+        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz
+        tar -xf clang-r416183b.tar.gz
+        cd ../../../../../..
 
-    - name: Clone GAS Assembler
-      run: |
-        git clone --depth=1 \
-          https://android.googlesource.com/platform/prebuilts/gas/linux-x86 \
-          kernel_platform/prebuilts/gas/linux-x86
+        # 2. Google Kernel Build Tools (Fixes missing 'env', 'mktemp', 'make')
+        rm -rf kernel_platform/build/build-tools
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/kernel-build-tools kernel_platform/build/build-tools
 
-    - name: Populate build-tools path (Sledgehammer Fix)
-      run: |
-        mkdir -p kernel_platform/build/build-tools/path/linux-x86
-        # Symlink ALL system binaries so Google's hermetic environment never complains
-        ln -sf /usr/bin/* kernel_platform/build/build-tools/path/linux-x86/ 2>/dev/null || true
-        ln -sf /bin/* kernel_platform/build/build-tools/path/linux-x86/ 2>/dev/null || true
+        # 3. Google GLIBC Sysroot (Fixes missing 'sys/types.h')
+        mkdir -p kernel_platform/prebuilts/gcc/linux-x86/host
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8 kernel_platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
+
+        # 4. Google GAS Assembler 
+        mkdir -p kernel_platform/prebuilts/gas/linux-x86
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gas/linux-x86 kernel_platform/prebuilts/gas/linux-x86
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
