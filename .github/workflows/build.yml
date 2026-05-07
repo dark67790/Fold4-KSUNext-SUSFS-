@@ -57,7 +57,8 @@ jobs:
         printf '#!/bin/bash\nexec /usr/bin/gcc -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nexec /usr/bin/g++ -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-        if[ -f kernel_platform/build/_setup_env.sh ]; then
+        # Fixed syntax error: added space after 'if'
+        if [ -f kernel_platform/build/_setup_env.sh ]; then
           echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
           echo 'export C_INCLUDE_PATH=/usr/include:/usr/include/x86_64-linux-gnu' >> kernel_platform/build/_setup_env.sh
           echo 'export CPLUS_INCLUDE_PATH=/usr/include:/usr/include/x86_64-linux-gnu' >> kernel_platform/build/_setup_env.sh
@@ -71,7 +72,6 @@ jobs:
 
     - name: Patch ALL Defconfigs (Ravindu XDA Method)
       run: |
-        # We must disable these in EVERY config file, otherwise Samsung overrides it
         FLAGS=(
           "CONFIG_SECURITY_DEFEX"
           "CONFIG_PROCA"
@@ -90,13 +90,10 @@ jobs:
         find kernel_platform -type f -name "*defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           for flag in "${FLAGS[@]}"; do
-            # Replace active flags with "is not set"
             sed -i "s/$flag=y/# $flag is not set/g" "$config"
-            # Append explicit disables to the bottom to guarantee enforcement
             echo "# $flag is not set" >> "$config"
           done
           
-          # Add KernelSU Requirements
           echo "CONFIG_KPROBES=y" >> "$config"
           echo "CONFIG_HAVE_KPROBES=y" >> "$config"
           echo "CONFIG_KPROBE_EVENTS=y" >> "$config"
