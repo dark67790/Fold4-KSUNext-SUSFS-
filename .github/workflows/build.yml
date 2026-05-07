@@ -33,13 +33,19 @@ jobs:
         wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r34/clang-r416183b.tar.gz
         tar -xf clang-r416183b.tar.gz
         cd ../../../../../..
+        
+        # Create symlinks for host tools that Samsung's GKI build script looks for
+        mkdir -p kernel_platform/build/build-tools/path/linux-x86
+        for cmd in nproc readlink sed tr make sh bash python3 grep awk find xargs zip unzip; do
+          ln -sf $(which $cmd) kernel_platform/build/build-tools/path/linux-x86/$cmd 2>/dev/null || true
+        done
 
     - name: Setup KernelSU-Next + SUSFS
       run: |
         cd kernel_platform/common
         
-        # 1. Install KernelSU-Next
-        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/main/kernel/setup.sh" | bash -
+        # 1. Install KernelSU-Next (Fixed 404: Branch is 'next')
+        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
         
         # 2. Clone simonpunk's SUSFS repo
         git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10
@@ -75,11 +81,11 @@ jobs:
     - name: Build kernel
       run: |
         # Make sure build script has execution rights
-        chmod +x build_kernel_GKI.sh
+        chmod +x build_kernel_GKI.sh || true
         bash build_kernel_GKI.sh
 
     - name: Upload kernel
       uses: actions/upload-artifact@v4
       with:
-        name: Samsung-Fold4-KSU-Next-SUSFS
+        name: Samsung-Fold4-KSUNext-SUSFS-Image
         path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image
