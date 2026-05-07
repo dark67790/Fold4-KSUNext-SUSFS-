@@ -29,9 +29,10 @@ jobs:
     - name: Setup KernelSU + SUSFS
       run: |
         cd kernel_platform/common
+        chmod +w drivers/Makefile
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-        git clone https://github.com/simonpunk/susfs4ksu susfs_src
-        patch -p1 < susfs_src/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch
+        wget -q https://raw.githubusercontent.com/simonpunk/susfs4ksu/main/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch
+        patch -p1 < 50_add_susfs_in_gki-android12-5.10.patch
 
     - name: Build kernel
       run: |
