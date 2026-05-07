@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next NUKE)
+name: Build Fold4 Kernel (KSU-Next NUKE V3)
 
 on:
   push:
@@ -34,54 +34,12 @@ jobs:
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
-    - name: Download Google Prebuilts (Archive Fix)
+    - name: Download Clang
       run: |
-        cd kernel_platform
-        
-        # 1. Clang (Using specific commit hash to ensure r416183b is found)
-        mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
+        mkdir -p clang-r416183b
         curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
-        tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
+        tar -xzf clang.tar.gz -C clang-r416183b
         rm clang.tar.gz
-        
-        # 2. GCC Host (Fixes sys/types.h)
-        mkdir -p prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
-        curl -LSs "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8/+archive/refs/heads/master.tar.gz" -o gcc_host.tar.gz
-        tar -xzf gcc_host.tar.gz -C prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
-        rm gcc_host.tar.gz
-        
-        # 3. Kernel Build Tools
-        mkdir -p prebuilts/kernel-build-tools/linux-x86
-        curl -LSs "https://android.googlesource.com/kernel/prebuilts/build-tools/+archive/refs/heads/master.tar.gz" -o build_tools.tar.gz
-        tar -xzf build_tools.tar.gz -C prebuilts/kernel-build-tools/linux-x86
-        rm build_tools.tar.gz
-        
-        # 4. GAS Assembler
-        mkdir -p prebuilts/gas/linux-x86
-        curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
-        tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
-        rm gas.tar.gz
-
-    - name: Link Hermetic Path Safely
-      run: |
-        TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
-        mkdir -p "$TOOLS_DIR"
-        
-        # Link system binaries
-        for dir in /bin /usr/bin /usr/local/bin; do
-          for file in "$dir"/*; do
-            if [ -x "$file" ] && [ ! -d "$file" ]; then
-              cmd=$(basename "$file")
-              [ ! -e "$TOOLS_DIR/$cmd" ] && ln -sf "$file" "$TOOLS_DIR/$cmd" 2>/dev/null || true
-            fi
-          done
-        done
-        
-        # Overwrite with our custom GCC/G++ wrappers to fix --rtlib issues
-        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/gcc "${args[@]}"\n' > "$TOOLS_DIR/gcc"
-        printf '#!/bin/bash\nargs=()\nfor arg in "$@"; do\n  case "$arg" in\n    --rtlib=*|--unwindlib=*) ;;\n    *) args+=("$arg") ;;\n  esac\ndone\nexec /usr/bin/g++ "${args[@]}"\n' > "$TOOLS_DIR/g++"
-        chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -102,15 +60,25 @@ jobs:
 
     - name: Build
       run: |
-        # Match the MMRM pathing expected in your build_kernel_GKI.sh
+        # 1. Setup paths
+        export CLANG_PATH=$(pwd)/clang-r416183b/bin
+        export PATH=$CLANG_PATH:$PATH
+        
+        # 2. Fix MMRM (Samsung requirement)
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         
-        # Patch build.sh to use our wrappers for host tools
-        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' kernel_platform/build/build.sh
+        # 3. Disable the Hermetic toolchain logic in build.sh
+        # We force it to use system tools (bison, flex, etc) instead of looking in kernel_platform/build-tools
+        sed -i 's/[[ -d "${BUILD_TOOLS_PATH}" ]] && PATH="${BUILD_TOOLS_PATH}:${PATH}"/PATH="${PATH}"/g' kernel_platform/build/build.sh
         
-        # Inject tool path
-        export PATH=$(pwd)/kernel_platform/build/build-tools/path/linux-x86:$PATH
+        # 4. Patch the build script to use system host compilers
+        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' kernel_platform/build/build.sh
+
+        # 5. Run the build with explicit variables to override Samsung's defaults
+        # This mirrors the behavior of the repo you linked
+        export LLVM=1
+        export LLVM_IAS=1
         
         bash build_kernel_GKI.sh
 
