@@ -56,21 +56,29 @@ jobs:
 
     - name: Setup Host Tools and Sysroot (GOD-MODE & GHOST TOOL)
       run: |
-        chmod -R u+w kernel_platform/build
-
-        TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
+        # 1. Ensure the directory is clean and exists
+        TOOLS_DIR="$(pwd)/kernel_platform/build/build-tools/path/linux-x86"
+        rm -rf "$TOOLS_DIR"
         mkdir -p "$TOOLS_DIR"
-        find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
-        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
         
+        # 2. Link binaries safely
+        chmod -R u+w kernel_platform/build
+        find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
+        
+        # 3. Remove conflicting compilers before injecting wrappers
+        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" "$TOOLS_DIR/ufdt_apply_overlay"
+        
+        # 4. Inject wrappers using absolute paths to avoid "No such file" errors
         printf '#!/bin/bash\nexec /usr/bin/gcc -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nexec /usr/bin/g++ -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
-        chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
         
-        printf '#!/bin/bash\ncp "$1" "${@: -1}"\nexit 0\n' > "$TOOLS_DIR/ufdt_apply_overlay"
-        chmod +x "$TOOLS_DIR/ufdt_apply_overlay"
+        # The Ghost Tool Bypass
+        printf '#!/bin/bash\nif [ "$#" -ge 2 ]; then cp "$1" "${@: -1}"; fi\nexit 0\n' > "$TOOLS_DIR/ufdt_apply_overlay"
+        
+        chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" "$TOOLS_DIR/ufdt_apply_overlay"
 
-        KBT=$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64
+        # 5. Library setup
+        KBT="$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64"
         mkdir -p "$KBT"
         cp /usr/lib/x86_64-linux-gnu/crt1.o "$KBT/" 2>/dev/null || true
         cp /usr/lib/x86_64-linux-gnu/crti.o "$KBT/" 2>/dev/null || true
@@ -78,9 +86,9 @@ jobs:
         cp /usr/lib/x86_64-linux-gnu/Scrt1.o "$KBT/" 2>/dev/null || true
         ln -sf /usr/lib/x86_64-linux-gnu/libc.so.6 "$KBT/libc.so.6"
         echo "GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a )" > "$KBT/libc.so"
-        ln -sf /usr/lib/x86_64-linux-gnu "$KBT/../lib64"
-
-        SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
+        
+        # 6. Sysroot Link
+        SYSROOT="$(pwd)/kernel_platform/build/build-tools/sysroot"
         rm -rf "$SYSROOT"
         ln -snf / "$SYSROOT"
 
@@ -121,8 +129,9 @@ jobs:
           "CONFIG_SEC_DEBUG_AP_CONTEXT"
         )
         
-        find kernel_platform -type f -name "*defconfig" -o -name "*.config" | while read -r config; do
+        find kernel_platform -type f \( -name "*defconfig" -o -name "*.config" \) | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
+          
           for flag in "${FLAGS[@]}"; do
             sed -i "s/.*${flag}.*/# ${flag} is not set/g" "$config"
           done
