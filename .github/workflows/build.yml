@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next XDA Surgeon + LTO Swap)
+name: Build Fold4 Kernel (LTO Warrior V9 - Dual Swap)
 
 on:
   push:
@@ -13,18 +13,21 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Free disk space & Create 6GB Swap
+    - name: Free disk space & Create 4GB Extra Swap
       run: |
-        # Wipe heavy unnecessary software
+        # 1. Aggressive Cleanup to make room for the swap file
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm
         
-        # Create 6GB Swap to handle LTO Linking
-        sudo dd if=/dev/zero of=/swapfile bs=1M count=6144
-        sudo chmod 600 /swapfile
-        sudo mkswap /swapfile
-        sudo swapon /swapfile
+        # 2. Create an EXTRA 4GB Swap (Renamed to avoid "Text file busy")
+        # 4GB = 4 * 1024 = 4096 MB
+        sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=4096
+        sudo chmod 600 /swapfile-extra
+        sudo mkswap /swapfile-extra
+        sudo swapon /swapfile-extra
         
+        # 3. Verify that we now have TWO swap sources
+        swapon --show
         free -h
         df -h
 
@@ -80,7 +83,6 @@ jobs:
 
     - name: Source Surgery (RKP Integrity Fix)
       run: |
-        # Fix the specific Samsung bug where RKP variables are called when RKP is disabled
         GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
         if [ -f "$GAF_FILE" ]; then
           chmod u+w "$GAF_FILE"
@@ -124,7 +126,7 @@ jobs:
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         mkdir -p out/target/product/q4q/
-        # Keep LTO enabled but fix host headers
+        # Inject custom host tool arguments into the main build script
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' kernel_platform/build/build.sh
         bash build_kernel_GKI.sh
 
@@ -133,3 +135,4 @@ jobs:
       with:
         name: Fold4-KSUNext-Image
         path: out/msm-waipio-waipio-gki/dist/Image
+
