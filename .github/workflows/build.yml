@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (Final Boss V14)
+name: Build Fold4 Kernel (V15 - Final Path Fix)
 
 on:
   push:
@@ -40,7 +40,9 @@ jobs:
 
     - name: Download Clang and GAS
       run: |
-        cd kernel_platform
+        # Use a more generic pathing to find the kernel_platform folder
+        PLATFORM_DIR=$(find . -maxdepth 2 -type d -name "kernel_platform" | head -n 1)
+        cd "$PLATFORM_DIR"
         mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
         curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
         tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
@@ -51,39 +53,43 @@ jobs:
         tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
         rm gas.tar.gz
 
-    - name: Hijack Sandbox Tools (Comprehensive Fix)
+    - name: Hijack Sandbox Tools
       run: |
-        # This is the secret "Sanitized" folder the script uses for tools
-        TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
-        mkdir -p "$TOOLS_DIR"
+        # Find the tools directory wherever it landed
+        TOOLS_DIR=$(find . -path "*/build-tools/path/linux-x86" | head -n 1)
+        if [ -z "$TOOLS_DIR" ]; then 
+          # Fallback if the folder doesn't exist yet
+          TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
+          mkdir -p "$TOOLS_DIR"
+        fi
         
-        # Link EVERYTHING. This stops the "rm not found" and "which not found" nonsense.
+        # Link EVERYTHING to stop "command not found"
         find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
-        
-        # Ensure Python and Env are mapped correctly
         ln -sf /usr/bin/python3 "$TOOLS_DIR/python"
         ln -sf /usr/bin/python3 "$TOOLS_DIR/python3"
         ln -sf /usr/bin/env "$TOOLS_DIR/env"
+        echo "TOOLS_DIR=$TOOLS_DIR" >> $GITHUB_ENV
 
     - name: Setup KernelSU-Next
-      working-directory: kernel_platform/common
       run: |
+        COMMON_DIR=$(find . -maxdepth 3 -type d -name "common" | head -n 1)
+        cd "$COMMON_DIR"
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
     - name: Source Surgery (RKP Integrity Fix)
       run: |
-        GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
+        GAF_FILE=$(find . -name "gaf_v6.c" | head -n 1)
         if [ -f "$GAF_FILE" ]; then
           chmod u+w "$GAF_FILE"
           sed -i 's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' "$GAF_FILE"
           sed -i 's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' "$GAF_FILE"
         fi
 
-    - name: Patch Defconfigs (Disable KNOX/RKP)
+    - name: Patch Defconfigs
       run: |
         FLAGS=("CONFIG_SECURITY_DEFEX" "CONFIG_PROCA" "CONFIG_FIVE" "CONFIG_UH" "CONFIG_RKP" "CONFIG_KDP" "CONFIG_KDP_CRED" "CONFIG_KDP_NS" "CONFIG_KDP_TEST" "CONFIG_RKP_TEST" "CONFIG_KNOX_KAP" "CONFIG_DEBUG_INFO_BTF")
-        find kernel_platform -type f -name "*defconfig" | while read -r config; do
+        find . -type f -name "*defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           for flag in "${FLAGS[@]}"; do
             sed -i "s/$flag=y/# $flag is not set/g" "$config"
@@ -97,25 +103,23 @@ jobs:
 
     - name: Build Kernel
       run: |
-        # Inject headers directly into the Host CC flags
-        # This fixes 'sys/types.h not found'
+        # 1. Fix Headers
         export HOST_EXTRACFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu"
         export HOST_EXTRALDFLAGS="-L/usr/lib/x86_64-linux-gnu -L/usr/lib"
-        
-        # Build variables
         export LTO=thin
-        export SKIP_MRPROPER=1
+        export PATH="$TOOLS_DIR:$PATH"
         
-        # Force the build to use the hijacked path
-        export PATH="$(pwd)/kernel_platform/build/build-tools/path/linux-x86:$PATH"
+        # 2. Find the build script regardless of where it is
+        BUILD_SCRIPT=$(find . -name "build_kernel_GKI.sh" | head -n 1)
+        SCRIPT_DIR=$(dirname "$BUILD_SCRIPT")
         
-        chmod +x kernel_platform/build/build_kernel_GKI.sh
-        bash kernel_platform/build/build_kernel_GKI.sh
+        # 3. Enter the directory and run it
+        cd "$SCRIPT_DIR"
+        chmod +x build_kernel_GKI.sh
+        bash build_kernel_GKI.sh
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-KSU-Image
-        path: |
-          out/**/dist/Image
-          out/**/dist/*.ko
+        name: Fold4-Final-Image
+        path: out/**/dist/Image
