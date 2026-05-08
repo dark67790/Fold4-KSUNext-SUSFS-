@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (V16 - Host Tooling Fix)
+name: Build Fold4 Kernel (Sysroot Master V17)
 
 on:
   push:
@@ -13,9 +13,10 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Free Disk Space & 12GB Swap
+    - name: Free disk space & Create 12GB Swap
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
         sudo apt-get clean
         sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=12288 status=progress
         sudo chmod 600 /swapfile-extra
@@ -25,46 +26,66 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils curl build-essential cpio wget gcc-multilib g++-multilib
+        sudo apt install -y bc bison flex libssl-dev libelf-dev \
+          python3-pip unzip git patch coreutils curl build-essential cpio wget gcc-multilib
 
-    - name: Download and Extract
+    - name: Download and Extract Samsung Source
       run: |
         pip install gdown
         gdown 1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M -O samsung.zip
         unzip samsung.zip
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
+        rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
     - name: Download Clang and GAS
       run: |
-        PLATFORM_DIR=$(find . -maxdepth 2 -type d -name "kernel_platform" | head -n 1)
-        cd "$PLATFORM_DIR"
+        cd kernel_platform
         mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
         curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
         tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
+        rm clang.tar.gz
+        
         mkdir -p prebuilts/gas/linux-x86
         curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
         tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
+        rm gas.tar.gz
+
+    - name: Create Fake Sysroot & Host Tools
+      run: |
+        # 1. Map tools to the internal sandbox path
+        TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
+        mkdir -p "$TOOLS_DIR"
+        find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
+        
+        # 2. Map system headers into the internal sysroot
+        # This fixes 'sys/types.h not found' by tricking the build into seeing Ubuntu headers
+        SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
+        mkdir -p "$SYSROOT"
+        ln -sf /usr "$SYSROOT/usr"
+        ln -sf /lib "$SYSROOT/lib"
+        ln -sf /lib64 "$SYSROOT/lib64"
 
     - name: Setup KernelSU-Next
+      working-directory: kernel_platform/common
       run: |
-        COMMON_DIR=$(find . -maxdepth 3 -type d -name "common" | head -n 1)
-        cd "$COMMON_DIR"
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-    - name: Source Surgery & Patching
+    - name: Source Surgery (RKP Integrity Fix)
       run: |
-        # RKP Fix
-        GAF_FILE=$(find . -name "gaf_v6.c" | head -n 1)
+        GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
+        # FIXED: Added space after 'if' and before '['
         if [ -f "$GAF_FILE" ]; then
           chmod u+w "$GAF_FILE"
           sed -i 's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' "$GAF_FILE"
           sed -i 's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' "$GAF_FILE"
         fi
-        # Defconfig patching
+
+    - name: Patch ALL Defconfigs
+      run: |
         FLAGS=("CONFIG_SECURITY_DEFEX" "CONFIG_PROCA" "CONFIG_FIVE" "CONFIG_UH" "CONFIG_RKP" "CONFIG_KDP" "CONFIG_KDP_CRED" "CONFIG_KDP_NS" "CONFIG_KDP_TEST" "CONFIG_RKP_TEST" "CONFIG_KNOX_KAP" "CONFIG_DEBUG_INFO_BTF")
-        find . -type f -name "*defconfig" | while read -r config; do
+        find kernel_platform -type f -name "*defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           for flag in "${FLAGS[@]}"; do
             sed -i "s/$flag=y/# $flag is not set/g" "$config"
@@ -76,31 +97,28 @@ jobs:
           echo "CONFIG_OVERLAY_FS=y" >> "$config"
         done
 
-    - name: Build Kernel (The Real Fix)
+    - name: Build
       run: |
-        # FIND THE TOOLS DIR
-        TOOLS_DIR=$(find . -path "*/build-tools/path/linux-x86" | head -n 1)
-        mkdir -p "$TOOLS_DIR"
-        # Link every tool into the path
-        find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
+        # PREPARE VENDOR DIRECTORIES (MMRM / DTB Fix)
+        # These must exist or the Qualcomm build script will bail out
+        mkdir -p out/vendor/qcom/opensource/mmrm-driver/
+        touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
+        mkdir -p out/target/product/q4q/
         
-        # KEY FIX: Force the build to use the system's GCC/Linker for Host tools
-        # This prevents the 'crt1.o not found' Clang error
-        export HOSTCC=gcc
-        export HOSTCXX=g++
-        export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib
-        
-        # Standard GKI flags
+        # Pass host headers through standardized variables
+        export HOSTCFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu"
+        export HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu -L/usr/lib"
         export LTO=thin
-        export PATH="$TOOLS_DIR:$PATH"
         
-        # Locate and run build script
-        BUILD_SCRIPT=$(find . -name "build_kernel_GKI.sh" | head -n 1)
-        cd $(dirname "$BUILD_SCRIPT")
-        bash build_kernel_GKI.sh
+        # Run from the root of the kernel platform
+        chmod +x kernel_platform/build_kernel_GKI.sh || true
+        bash kernel_platform/build_kernel_GKI.sh
 
-    - name: Upload
+    - name: Upload Image
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-Fixed-Image
-        path: out/**/dist/Image
+        name: Fold4-V17-Image
+        path: |
+          out/msm-waipio-waipio-gki/dist/Image
+          out/msm-waipio-waipio-gki/dist/*.ko
+          out/msm-waipio-waipio-gki/dist/*.dtb
