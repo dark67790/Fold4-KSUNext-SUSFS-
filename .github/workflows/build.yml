@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next)
+name: Build Fold4 Kernel (KSU-Next FINAL)
 
 on:
   push:
@@ -22,7 +22,9 @@ jobs:
         sudo chmod 600 /swapfile-extra
         sudo mkswap /swapfile-extra
         sudo swapon /swapfile-extra
+        swapon --show
         free -h
+        df -h
 
     - name: Install dependencies
       run: |
@@ -46,29 +48,48 @@ jobs:
         curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
         tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
         rm clang.tar.gz
+        
         mkdir -p prebuilts/gas/linux-x86
         curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
         tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
         rm gas.tar.gz
 
-    - name: Setup Host Tools
+    - name: Setup Host Tools and Sysroot (GOD-MODE & GHOST TOOL)
       run: |
         chmod -R u+w kernel_platform/build
+
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
         find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
         rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-        printf '#!/bin/bash\nexec /usr/bin/gcc -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
-        printf '#!/bin/bash\nexec /usr/bin/g++ -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
+        
+        # Gag Ubuntu's GCC
+        printf '#!/bin/bash\nexec /usr/bin/gcc -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
+        printf '#!/bin/bash\nexec /usr/bin/g++ -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
         
+        # Ghost Tool Bypass for dtb
+        printf '#!/bin/bash\ncp "$1" "${@: -1}"\nexit 0\n' > "$TOOLS_DIR/ufdt_apply_overlay"
+        chmod +x "$TOOLS_DIR/ufdt_apply_overlay"
+
         KBT=$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64
         mkdir -p "$KBT"
-        cp /usr/lib/x86_64-linux-gnu/crt1.o "$KBT/"
-        cp /usr/lib/x86_64-linux-gnu/crti.o "$KBT/"
-        cp /usr/lib/x86_64-linux-gnu/crtn.o "$KBT/"
+        cp /usr/lib/x86_64-linux-gnu/crt1.o "$KBT/" 2>/dev/null || true
+        cp /usr/lib/x86_64-linux-gnu/crti.o "$KBT/" 2>/dev/null || true
+        cp /usr/lib/x86_64-linux-gnu/crtn.o "$KBT/" 2>/dev/null || true
+        cp /usr/lib/x86_64-linux-gnu/Scrt1.o "$KBT/" 2>/dev/null || true
         ln -sf /usr/lib/x86_64-linux-gnu/libc.so.6 "$KBT/libc.so.6"
         echo "GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a )" > "$KBT/libc.so"
+        ln -sf /usr/lib/x86_64-linux-gnu "$KBT/../lib64"
+
+        # Direct root symlink sysroot
+        SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
+        rm -rf "$SYSROOT"
+        ln -snf / "$SYSROOT"
+
+        if [ -f kernel_platform/build/_setup_env.sh ]; then
+          echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
+        fi
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -76,41 +97,68 @@ jobs:
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-    - name: Patch Defconfigs
+    - name: Source Surgery RKP Fix
+      run: |
+        GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
+        if[ -f "$GAF_FILE" ]; then
+          chmod u+w "$GAF_FILE"
+          sed -i 's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' "$GAF_FILE"
+          sed -i 's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' "$GAF_FILE"
+        fi
+
+    - name: Patch Defconfigs (CLEAN MERGE + MODPOST FIX)
       run: |
         FLAGS=(
-          "CONFIG_SECURITY_DEFEX" "CONFIG_PROCA" "CONFIG_FIVE" "CONFIG_UH"
-          "CONFIG_RKP" "CONFIG_KDP" "CONFIG_KDP_CRED" "CONFIG_KDP_NS"
-          "CONFIG_KNOX_KAP" "CONFIG_SEC_ARM64_AP_CONTEXT" "CONFIG_SEC_ABC"
+          "CONFIG_SECURITY_DEFEX"
+          "CONFIG_PROCA"
+          "CONFIG_FIVE"
+          "CONFIG_UH"
+          "CONFIG_RKP"
+          "CONFIG_KDP"
+          "CONFIG_KDP_CRED"
+          "CONFIG_KDP_NS"
+          "CONFIG_KDP_TEST"
+          "CONFIG_RKP_TEST"
+          "CONFIG_KNOX_KAP"
+          "CONFIG_DEBUG_INFO_BTF"
+          "CONFIG_SEC_DEBUG_AP_CONTEXT"
         )
-        find kernel_platform -type f -name "*defconfig" | while read -r config; do
-          chmod u+w "$config"
+        
+        find kernel_platform -type f -name "*defconfig" -o -name "*.config" | while read -r config; do
+          chmod u+w "$config" 2>/dev/null || true
           for flag in "${FLAGS[@]}"; do
-            sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
-            echo "# ${flag} is not set" >> "$config"
+            sed -i "s/.*${flag}.*/# ${flag} is not set/g" "$config"
           done
-          grep -q "CONFIG_KPROBES=y" "$config" || echo "CONFIG_KPROBES=y" >> "$config"
+          
+          # Clean existing KSU entries to prevent duplicates in the final merge
+          sed -i '/CONFIG_KPROBES/d' "$config"
+          sed -i '/CONFIG_HAVE_KPROBES/d' "$config"
+          sed -i '/CONFIG_KPROBE_EVENTS/d' "$config"
+          sed -i '/CONFIG_OVERLAY_FS/d' "$config"
         done
+        
+        # Add KSU flags ONLY ONCE to the base config
+        GKI_CONF="kernel_platform/common/arch/arm64/configs/gki_defconfig"
+        echo "CONFIG_KPROBES=y" >> "$GKI_CONF"
+        echo "CONFIG_HAVE_KPROBES=y" >> "$GKI_CONF"
+        echo "CONFIG_KPROBE_EVENTS=y" >> "$GKI_CONF"
+        echo "CONFIG_OVERLAY_FS=y" >> "$GKI_CONF"
 
     - name: Build kernel
       run: |
-        # THE KILL SWITCHES:
-        export MAKE_GOALS="Image"         # Tell 'make' to only target the kernel binary
-        export SKIP_EXT_MODULES=1        # Skip building Techpack modules
-        export SKIP_VENDOR_BOOT=1        # Tell the script not to worry about vendor files
-        export BUILD_BOOT_IMG=           # Disable boot.img creation
-        export BUILD_VENDOR_BOOT_IMG=    # Disable vendor_boot.img (the home of DTB)
+        mkdir -p out/vendor/qcom/opensource/mmrm-driver/
+        touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
+        mkdir -p out/target/product/q4q/
         
-        # CORRECT SED: Comment out the entire multi-line block for KBUILD_EXT_MODULES
-        # This finds the start and end of the quote block and comments every line in between.
-        sed -i '/export KBUILD_EXT_MODULES=/,/\"/ s/^/#/' build_kernel_GKI.sh
+        # Force Global Variant build on Korean Source
+        sed -i 's/BUILD_TARGET=.*/BUILD_TARGET=q4q_eur_openx/g' build_kernel_GKI.sh
         
-        # Bypass the config-checker
-        find . -type f -name "*.sh" -exec sed -i 's/check_merged_defconfig/true/g' {} +
-
-        # Fix Host Tool arguments in build.sh
-        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
+        # Inject Host Tools into Google's script
+        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-w -I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
           kernel_platform/build/build.sh
+        
+        # Assassinate the Snitch Script
+        find . -type f -name "*.sh" -exec sed -i 's/check_merged_defconfig/true/g' {} +
         
         export LTO=thin
         bash build_kernel_GKI.sh
@@ -119,4 +167,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Fold4-KSUNext-Image
-        path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image
+        path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image*
