@@ -99,7 +99,7 @@ jobs:
           echo "Applied integrity fix to $GAF_FILE"
         fi
 
-    - name: Patch Defconfigs and Build Configs
+    - name: Patch Defconfigs
       run: |
         FLAGS=(
           "CONFIG_SECURITY_DEFEX"
@@ -126,14 +126,6 @@ jobs:
           grep -q "^CONFIG_OVERLAY_FS=y" "$config" || echo "CONFIG_OVERLAY_FS=y" >> "$config"
         done
 
-        find kernel_platform -type f -name "build.config*" | while read -r cfg; do
-          if grep -q "MAKE_GOALS" "$cfg"; then
-            chmod u+w "$cfg"
-            sed -i 's/^MAKE_GOALS=.*/MAKE_GOALS="Image"/' "$cfg"
-            echo "Patched MAKE_GOALS in $cfg"
-          fi
-        done
-
     - name: Build kernel
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
@@ -147,6 +139,8 @@ jobs:
           's|TOOL_ARGS+=("LLVM=1")|TOOL_ARGS+=("LLVM=1" "HOSTCC=/usr/bin/gcc" "HOSTCXX=/usr/bin/g++" "HOSTCFLAGS=-I/usr/include -I/usr/include/x86_64-linux-gnu" "HOSTLDFLAGS=-L/usr/lib/x86_64-linux-gnu")|' \
           kernel_platform/build/build.sh
 
+        # Overrides MAKE_GOALS inside build.sh after all build configs are
+        # sourced, so it wins regardless of what the configs set
         export POST_DEFCONFIG_CMDS="MAKE_GOALS='Image'"
         export SKIP_EXT_MODULES=1
 
