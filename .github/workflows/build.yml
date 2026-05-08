@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next XDA Surgeon)
+name: Build Fold4 Kernel (KSU-Next XDA Surgeon + LTO Swap)
 
 on:
   push:
@@ -13,10 +13,19 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Free disk space
+    - name: Free disk space & Create 6GB Swap
       run: |
+        # Wipe heavy unnecessary software
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm
+        
+        # Create 6GB Swap to handle LTO Linking
+        sudo dd if=/dev/zero of=/swapfile bs=1M count=6144
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        
+        free -h
         df -h
 
     - name: Install dependencies
@@ -57,7 +66,6 @@ jobs:
         printf '#!/bin/bash\nexec /usr/bin/gcc -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nexec /usr/bin/g++ -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-        # Fixed syntax error: added space after 'if'
         if [ -f kernel_platform/build/_setup_env.sh ]; then
           echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
           echo 'export C_INCLUDE_PATH=/usr/include:/usr/include/x86_64-linux-gnu' >> kernel_platform/build/_setup_env.sh
@@ -69,6 +77,17 @@ jobs:
       run: |
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+
+    - name: Source Surgery (RKP Integrity Fix)
+      run: |
+        # Fix the specific Samsung bug where RKP variables are called when RKP is disabled
+        GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
+        if [ -f "$GAF_FILE" ]; then
+          chmod u+w "$GAF_FILE"
+          sed -i 's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' "$GAF_FILE"
+          sed -i 's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' "$GAF_FILE"
+          echo "Applied integrity fix to $GAF_FILE"
+        fi
 
     - name: Patch ALL Defconfigs (Ravindu XDA Method)
       run: |
@@ -105,6 +124,7 @@ jobs:
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         mkdir -p out/target/product/q4q/
+        # Keep LTO enabled but fix host headers
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' kernel_platform/build/build.sh
         bash build_kernel_GKI.sh
 
