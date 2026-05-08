@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next)
+name: Build Fold4 Kernel (KSU-Next FINAL)
 
 on:
   push:
@@ -75,7 +75,6 @@ jobs:
         echo "GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a )" > "$KBT/libc.so"
         ln -sf /usr/lib/x86_64-linux-gnu "$KBT/../lib64"
 
-        # FIXED SYSROOT: Maps subfolders directly so stdio.h is found!
         SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
         rm -rf "$SYSROOT"
         mkdir -p "$SYSROOT/usr"
@@ -84,7 +83,7 @@ jobs:
         ln -sf /lib "$SYSROOT/lib"
         ln -sf /lib64 "$SYSROOT/lib64"
 
-        # FIXED: Added space between 'if' and '['
+        # FIXED: Added space after 'if'
         if [ -f kernel_platform/build/_setup_env.sh ]; then
           echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
         fi
@@ -105,7 +104,7 @@ jobs:
           echo "Applied integrity fix to $GAF_FILE"
         fi
 
-    - name: Patch Defconfigs
+    - name: Patch Defconfigs (Clean Merge Method)
       run: |
         FLAGS=(
           "CONFIG_SECURITY_DEFEX"
@@ -121,17 +120,31 @@ jobs:
           "CONFIG_KNOX_KAP"
           "CONFIG_DEBUG_INFO_BTF"
         )
-        find kernel_platform -type f -name "*defconfig" | while read -r config; do
+        
+        # Find all config files
+        CONFIGS=$(find kernel_platform -type f -name "*defconfig" -o -name "*.config")
+        
+        for config in $CONFIGS; do
           chmod u+w "$config" 2>/dev/null || true
+          
+          # 1. Nuke Samsung Security Flags
           for flag in "${FLAGS[@]}"; do
-            sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
-            echo "# ${flag} is not set" >> "$config"
+            sed -i "s/.*${flag}.*/# ${flag} is not set/g" "$config"
           done
-          echo "CONFIG_KPROBES=y" >> "$config"
-          echo "CONFIG_HAVE_KPROBES=y" >> "$config"
-          echo "CONFIG_KPROBE_EVENTS=y" >> "$config"
-          echo "CONFIG_OVERLAY_FS=y" >> "$config"
+          
+          # 2. Strip ALL existing KSU flags so we don't create duplicates during merge
+          sed -i '/CONFIG_KPROBES/d' "$config"
+          sed -i '/CONFIG_HAVE_KPROBES/d' "$config"
+          sed -i '/CONFIG_KPROBE_EVENTS/d' "$config"
+          sed -i '/CONFIG_OVERLAY_FS/d' "$config"
         done
+        
+        # 3. Add KSU flags ONLY to the main gki_defconfig
+        GKI_CONF="kernel_platform/common/arch/arm64/configs/gki_defconfig"
+        echo "CONFIG_KPROBES=y" >> "$GKI_CONF"
+        echo "CONFIG_HAVE_KPROBES=y" >> "$GKI_CONF"
+        echo "CONFIG_KPROBE_EVENTS=y" >> "$GKI_CONF"
+        echo "CONFIG_OVERLAY_FS=y" >> "$GKI_CONF"
 
     - name: Build kernel
       run: |
