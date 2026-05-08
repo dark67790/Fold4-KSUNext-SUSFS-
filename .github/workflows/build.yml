@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next)
+name: Build Fold4 Kernel (V24 - Native Official)
 
 on:
   push:
@@ -13,18 +13,19 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Free Disk Space and Create Swap
+    - name: Free disk space & Create 8GB Swap
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
         sudo apt-get clean
-        sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=12288 status=progress
+        
+        # Reduced to 8GB to balance RAM needs vs Disk Space
+        sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=8192 status=progress
         sudo chmod 600 /swapfile-extra
         sudo mkswap /swapfile-extra
         sudo swapon /swapfile-extra
-        swapon --show
+        
         free -h
-        df -h
 
     - name: Install dependencies
       run: |
@@ -41,50 +42,26 @@ jobs:
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
-    - name: Download Clang and GAS
+    - name: Restore Official Google Prebuilts
       run: |
         cd kernel_platform
+        
+        # 1. Clang (Stable Archive)
+        rm -rf prebuilts-master/clang/host/linux-x86/clang-r416183b
         mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
-        curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
-        tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
-        rm clang.tar.gz
-        mkdir -p prebuilts/gas/linux-x86
-        curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
-        tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
-        rm gas.tar.gz
-
-    - name: Setup Host Tools and Sysroot
-      run: |
-        chmod -R u+w kernel_platform/build
-
-        TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
-        mkdir -p "$TOOLS_DIR"
-        find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
-        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-        printf '#!/bin/bash\nexec /usr/bin/gcc -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
-        printf '#!/bin/bash\nexec /usr/bin/g++ -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
-        chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-
-        KBT=$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64
-        mkdir -p "$KBT"
-        cp /usr/lib/x86_64-linux-gnu/crt1.o "$KBT/"
-        cp /usr/lib/x86_64-linux-gnu/crti.o "$KBT/"
-        cp /usr/lib/x86_64-linux-gnu/crtn.o "$KBT/"
-        cp /usr/lib/x86_64-linux-gnu/Scrt1.o "$KBT/" 2>/dev/null || true
-        ln -sf /usr/lib/x86_64-linux-gnu/libc.so.6 "$KBT/libc.so.6"
-        echo "GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a )" > "$KBT/libc.so"
-        ln -sf /usr/lib/x86_64-linux-gnu "$KBT/../lib64"
-
-        SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
-        mkdir -p "$SYSROOT/usr/lib"
-        ln -sf /usr "$SYSROOT/usr"
-        ln -sf /lib "$SYSROOT/lib"
-        ln -sf /lib64 "$SYSROOT/lib64"
-        ln -sf /usr/lib/x86_64-linux-gnu "$SYSROOT/usr/lib/x86_64-linux-gnu"
-
-        if [ -f kernel_platform/build/_setup_env.sh ]; then
-          echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
-        fi
+        curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" | tar -xz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
+        
+        # 2. Kernel Build Tools (Corrected URL)
+        rm -rf prebuilts/kernel-build-tools
+        git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools.git prebuilts/kernel-build-tools
+        
+        # 3. GCC Host (Corrected URL for sysroot/headers)
+        rm -rf prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8.git prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
+        
+        # 4. GAS Assembler
+        rm -rf prebuilts/gas/linux-x86
+        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gas/linux-x86.git prebuilts/gas/linux-x86
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -92,37 +69,23 @@ jobs:
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-    - name: Source Surgery RKP Fix
+    - name: Source Surgery (RKP Integrity Fix)
       run: |
         GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
         if [ -f "$GAF_FILE" ]; then
           chmod u+w "$GAF_FILE"
           sed -i 's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' "$GAF_FILE"
           sed -i 's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' "$GAF_FILE"
-          echo "Applied integrity fix to $GAF_FILE"
         fi
 
-    - name: Patch Defconfigs
+    - name: Patch ALL Defconfigs
       run: |
-        FLAGS=(
-          "CONFIG_SECURITY_DEFEX"
-          "CONFIG_PROCA"
-          "CONFIG_FIVE"
-          "CONFIG_UH"
-          "CONFIG_RKP"
-          "CONFIG_KDP"
-          "CONFIG_KDP_CRED"
-          "CONFIG_KDP_NS"
-          "CONFIG_KDP_TEST"
-          "CONFIG_RKP_TEST"
-          "CONFIG_KNOX_KAP"
-          "CONFIG_DEBUG_INFO_BTF"
-        )
+        FLAGS=("CONFIG_SECURITY_DEFEX" "CONFIG_PROCA" "CONFIG_FIVE" "CONFIG_UH" "CONFIG_RKP" "CONFIG_KDP" "CONFIG_KDP_CRED" "CONFIG_KDP_NS" "CONFIG_KDP_TEST" "CONFIG_RKP_TEST" "CONFIG_KNOX_KAP" "CONFIG_DEBUG_INFO_BTF")
         find kernel_platform -type f -name "*defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           for flag in "${FLAGS[@]}"; do
-            sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
-            echo "# ${flag} is not set" >> "$config"
+            sed -i "s/$flag=y/# $flag is not set/g" "$config"
+            echo "# $flag is not set" >> "$config"
           done
           echo "CONFIG_KPROBES=y" >> "$config"
           echo "CONFIG_HAVE_KPROBES=y" >> "$config"
@@ -130,18 +93,24 @@ jobs:
           echo "CONFIG_OVERLAY_FS=y" >> "$config"
         done
 
-    - name: Build kernel
+    - name: Build
       run: |
+        # Ensure DTB/Artifact paths exist
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         mkdir -p out/target/product/q4q/
-        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
-          kernel_platform/build/build.sh
+        
+        # Force ThinLTO for memory efficiency
         export LTO=thin
-        bash build_kernel_GKI.sh
+        
+        chmod +x kernel_platform/build/build_kernel_GKI.sh || true
+        bash kernel_platform/build_kernel_GKI.sh
 
     - name: Upload Image
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-KSUNext-Image
-        path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image
+        name: Fold4-Native-KSU-Image
+        path: |
+          kernel_platform/out/msm-waipio-waipio-gki/dist/Image
+          kernel_platform/out/msm-waipio-waipio-gki/dist/*.dtb
+          kernel_platform/out/msm-waipio-waipio-gki/dist/*.ko
