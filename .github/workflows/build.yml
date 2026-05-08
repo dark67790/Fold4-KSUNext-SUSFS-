@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (Path Recovery V11)
+name: Build Fold4 Kernel (Sledgehammer Path V12)
 
 on:
   push:
@@ -51,21 +51,20 @@ jobs:
         tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
         rm gas.tar.gz
 
-    - name: Restore Missing Host Tools (The Fix)
+    - name: Restore ALL Host Tools (Sledgehammer Fix)
       run: |
-        # This directory is where the Samsung script looks for 'sed', 'nproc', etc.
+        # This is the directory the Samsung script is obsessed with
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
         
-        # Manually symlink the essential tools from the Ubuntu runner into the build's "sandbox"
-        # This fixes the "command not found" errors
-        for tool in nproc readlink sed tr cut find bc awk grep coreutils hostname; do
-          ln -sf $(which $tool) "$TOOLS_DIR/$tool"
-        done
+        # Sledgehammer: Link EVERY executable from the system into the sandbox.
+        # This ensures 'rm', 'sed', 'nproc', 'cp', and anything else are available.
+        find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
         
-        # Ensure 'env' and 'bash' are also available
+        # Extra safety for python and env
+        ln -sf /usr/bin/python3 "$TOOLS_DIR/python"
+        ln -sf /usr/bin/python3 "$TOOLS_DIR/python3"
         ln -sf /usr/bin/env "$TOOLS_DIR/env"
-        ln -sf /usr/bin/bash "$TOOLS_DIR/bash"
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -99,21 +98,16 @@ jobs:
 
     - name: Build
       run: |
-        mkdir -p out/vendor/qcom/opensource/mmrm-driver/
-        touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
-        mkdir -p out/target/product/q4q/
-        
-        # Set essential Host environment variables
+        # Set host tool flags
         export HOSTCFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu"
         export HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu -L/usr/lib"
         export LTO=thin
         
-        # Ensure the script is executable and run it
-        chmod +x build_kernel_GKI.sh
+        # Run the Samsung build script
         bash build_kernel_GKI.sh
 
     - name: Upload Image
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-V11-Image
+        name: Fold4-Final-Image
         path: out/msm-waipio-waipio-gki/dist/Image
