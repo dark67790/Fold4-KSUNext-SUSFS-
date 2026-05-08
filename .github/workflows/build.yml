@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (Sysroot Master V17)
+name: Build Fold4 Kernel (V19 - Idempotent Fix)
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout
@@ -27,7 +27,7 @@ jobs:
       run: |
         sudo apt update
         sudo apt install -y bc bison flex libssl-dev libelf-dev \
-          python3-pip unzip git patch coreutils curl build-essential cpio wget gcc-multilib
+          python3-pip unzip git patch coreutils curl build-essential cpio wget gcc-multilib g++-multilib
 
     - name: Download and Extract Samsung Source
       run: |
@@ -53,13 +53,14 @@ jobs:
 
     - name: Create Fake Sysroot & Host Tools
       run: |
-        # 1. Map tools to the internal sandbox path
+        # Use -p to prevent "File exists" errors
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
+        
+        # Link tools (using -f to overwrite if they exist)
         find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
         
-        # 2. Map system headers into the internal sysroot
-        # This fixes 'sys/types.h not found' by tricking the build into seeing Ubuntu headers
+        # Create Sysroot (using -p to prevent "File exists" errors)
         SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
         mkdir -p "$SYSROOT"
         ln -sf /usr "$SYSROOT/usr"
@@ -75,7 +76,6 @@ jobs:
     - name: Source Surgery (RKP Integrity Fix)
       run: |
         GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
-        # FIXED: Added space after 'if' and before '['
         if [ -f "$GAF_FILE" ]; then
           chmod u+w "$GAF_FILE"
           sed -i 's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' "$GAF_FILE"
@@ -99,25 +99,24 @@ jobs:
 
     - name: Build
       run: |
-        # PREPARE VENDOR DIRECTORIES (MMRM / DTB Fix)
-        # These must exist or the Qualcomm build script will bail out
+        # 1. Force QCOM/Samsung directories
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         mkdir -p out/target/product/q4q/
         
-        # Pass host headers through standardized variables
+        # 2. Set Host Flags
         export HOSTCFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu"
         export HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu -L/usr/lib"
         export LTO=thin
         
-        # Run from the root of the kernel platform
+        # 3. Execute
         chmod +x kernel_platform/build_kernel_GKI.sh || true
         bash kernel_platform/build_kernel_GKI.sh
 
     - name: Upload Image
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-V17-Image
+        name: Fold4-V19-Image
         path: |
           out/msm-waipio-waipio-gki/dist/Image
           out/msm-waipio-waipio-gki/dist/*.ko
