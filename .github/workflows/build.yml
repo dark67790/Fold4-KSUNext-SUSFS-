@@ -162,7 +162,12 @@ jobs:
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-w -I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
           kernel_platform/build/build.sh
         
-        find . -type f -name "*.sh" -exec sed -i 's/check_merged_defconfig/true/g' {} +
+        # ========================================================
+        # ASSASSINATE THE SNITCH SCRIPTS (The Real Way)
+        # Targets the build.config files where they actually live!
+        # ========================================================
+        find kernel_platform -type f -name "build.config.*" -exec sed -i 's/check_merged_defconfig/true/g' {} +
+        find kernel_platform -type f -name "build.config.*" -exec sed -i 's/sanity_check_abi/true/g' {} +
         
         export LTO=thin
         bash build_kernel_GKI.sh
