@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next + Sysroot Master)
+name: Build Fold4 Kernel (V20 - Brute Force Cleanup)
 
 on:
   push:
@@ -7,13 +7,13 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Free disk space and Create Swap
+    - name: Free disk space & Create 12GB Swap
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
@@ -22,14 +22,12 @@ jobs:
         sudo chmod 600 /swapfile-extra
         sudo mkswap /swapfile-extra
         sudo swapon /swapfile-extra
-        swapon --show
-        free -h
 
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y bc bison flex libssl-dev libelf-dev \
-          python3-pip unzip git patch coreutils curl build-essential cpio wget
+          python3-pip unzip git patch coreutils curl build-essential cpio wget gcc-multilib g++-multilib
 
     - name: Download and Extract Samsung Source
       run: |
@@ -47,17 +45,24 @@ jobs:
         curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
         tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
         rm clang.tar.gz
+        
         mkdir -p prebuilts/gas/linux-x86
         curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
         tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
         rm gas.tar.gz
 
-    - name: Create Host Tools and Fake Sysroot
+    - name: Create Fake Sysroot & Host Tools (Atomic Wipe)
       run: |
+        # Use rm -rf to kill existing links/files before creating directories
+        # This prevents the "File exists" error even if it's a symlink
+        
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
+        rm -rf "$TOOLS_DIR"
         mkdir -p "$TOOLS_DIR"
         find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
+        
         SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
+        rm -rf "$SYSROOT"
         mkdir -p "$SYSROOT"
         ln -sf /usr "$SYSROOT/usr"
         ln -sf /lib "$SYSROOT/lib"
@@ -69,37 +74,23 @@ jobs:
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-    - name: Source Surgery RKP Integrity Fix
+    - name: Source Surgery (RKP Integrity Fix)
       run: |
         GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
         if [ -f "$GAF_FILE" ]; then
           chmod u+w "$GAF_FILE"
           sed -i 's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' "$GAF_FILE"
           sed -i 's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' "$GAF_FILE"
-          echo "Applied integrity fix to $GAF_FILE"
         fi
 
-    - name: Patch Defconfigs
+    - name: Patch ALL Defconfigs
       run: |
-        FLAGS=(
-          "CONFIG_SECURITY_DEFEX"
-          "CONFIG_PROCA"
-          "CONFIG_FIVE"
-          "CONFIG_UH"
-          "CONFIG_RKP"
-          "CONFIG_KDP"
-          "CONFIG_KDP_CRED"
-          "CONFIG_KDP_NS"
-          "CONFIG_KDP_TEST"
-          "CONFIG_RKP_TEST"
-          "CONFIG_KNOX_KAP"
-          "CONFIG_DEBUG_INFO_BTF"
-        )
+        FLAGS=("CONFIG_SECURITY_DEFEX" "CONFIG_PROCA" "CONFIG_FIVE" "CONFIG_UH" "CONFIG_RKP" "CONFIG_KDP" "CONFIG_KDP_CRED" "CONFIG_KDP_NS" "CONFIG_KDP_TEST" "CONFIG_RKP_TEST" "CONFIG_KNOX_KAP" "CONFIG_DEBUG_INFO_BTF")
         find kernel_platform -type f -name "*defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           for flag in "${FLAGS[@]}"; do
-            sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
-            echo "# ${flag} is not set" >> "$config"
+            sed -i "s/$flag=y/# $flag is not set/g" "$config"
+            echo "# $flag is not set" >> "$config"
           done
           echo "CONFIG_KPROBES=y" >> "$config"
           echo "CONFIG_HAVE_KPROBES=y" >> "$config"
@@ -107,19 +98,24 @@ jobs:
           echo "CONFIG_OVERLAY_FS=y" >> "$config"
         done
 
-    - name: Build kernel
+    - name: Build
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         mkdir -p out/target/product/q4q/
+        
+        export HOSTCFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu"
+        export HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu -L/usr/lib"
         export LTO=thin
-        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++")/' \
-          kernel_platform/build/build.sh
-        bash build_kernel_GKI.sh
+        
+        chmod +x kernel_platform/build_kernel_GKI.sh || true
+        bash kernel_platform/build_kernel_GKI.sh
 
     - name: Upload Image
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-KSUNext-Image
-        path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image
-
+        name: Fold4-V20-Image
+        path: |
+          out/msm-waipio-waipio-gki/dist/Image
+          out/msm-waipio-waipio-gki/dist/*.ko
+          out/msm-waipio-waipio-gki/dist/*.dtb
