@@ -22,9 +22,7 @@ jobs:
         sudo chmod 600 /swapfile-extra
         sudo mkswap /swapfile-extra
         sudo swapon /swapfile-extra
-        swapon --show
         free -h
-        df -h
 
     - name: Install dependencies
       run: |
@@ -59,38 +57,21 @@ jobs:
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
         find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
-        
-        # ADDED ufdt_apply_overlay to the rm command to clear any broken symlinks first
         rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" "$TOOLS_DIR/ufdt_apply_overlay"
         
         printf '#!/bin/bash\nexec /usr/bin/gcc -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nexec /usr/bin/g++ -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
-        chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-        
-        # GHOST TOOL BYPASS
-        printf '#!/bin/bash\ncp "$1" "${@: -1}"\nexit 0\n' > "$TOOLS_DIR/ufdt_apply_overlay"
-        chmod +x "$TOOLS_DIR/ufdt_apply_overlay"
+        # Ghost tool remains as a fallback safety
+        printf '#!/bin/bash\nexit 0\n' > "$TOOLS_DIR/ufdt_apply_overlay"
+        chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" "$TOOLS_DIR/ufdt_apply_overlay"
         
         KBT=$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64
         mkdir -p "$KBT"
         cp /usr/lib/x86_64-linux-gnu/crt1.o "$KBT/"
         cp /usr/lib/x86_64-linux-gnu/crti.o "$KBT/"
         cp /usr/lib/x86_64-linux-gnu/crtn.o "$KBT/"
-        cp /usr/lib/x86_64-linux-gnu/Scrt1.o "$KBT/" 2>/dev/null || true
         ln -sf /usr/lib/x86_64-linux-gnu/libc.so.6 "$KBT/libc.so.6"
         echo "GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a )" > "$KBT/libc.so"
-        ln -sf /usr/lib/x86_64-linux-gnu "$KBT/../lib64"
-        SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
-        rm -rf "$SYSROOT"
-        mkdir -p "$SYSROOT/usr"
-        ln -sf /usr/include "$SYSROOT/usr/include"
-        ln -sf /usr/lib "$SYSROOT/usr/lib"
-        ln -sf /lib "$SYSROOT/lib"
-        ln -sf /lib64 "$SYSROOT/lib64"
-        
-        if [ -f kernel_platform/build/_setup_env.sh ]; then
-          echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
-        fi
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -105,47 +86,44 @@ jobs:
           chmod u+w "$GAF_FILE"
           sed -i 's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' "$GAF_FILE"
           sed -i 's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' "$GAF_FILE"
-          echo "Applied integrity fix to $GAF_FILE"
         fi
 
     - name: Patch Defconfigs
       run: |
         FLAGS=(
-          "CONFIG_SECURITY_DEFEX"
-          "CONFIG_PROCA"
-          "CONFIG_FIVE"
-          "CONFIG_UH"
-          "CONFIG_RKP"
-          "CONFIG_KDP"
-          "CONFIG_KDP_CRED"
-          "CONFIG_KDP_NS"
-          "CONFIG_KDP_TEST"
-          "CONFIG_RKP_TEST"
-          "CONFIG_KNOX_KAP"
-          "CONFIG_DEBUG_INFO_BTF"
+          "CONFIG_SECURITY_DEFEX" "CONFIG_PROCA" "CONFIG_FIVE" "CONFIG_UH"
+          "CONFIG_RKP" "CONFIG_KDP" "CONFIG_KDP_CRED" "CONFIG_KDP_NS"
+          "CONFIG_KNOX_KAP" "CONFIG_SEC_ARM64_AP_CONTEXT" "CONFIG_SEC_ABC"
         )
         find kernel_platform -type f -name "*defconfig" | while read -r config; do
-          chmod u+w "$config" 2>/dev/null || true
+          chmod u+w "$config"
           for flag in "${FLAGS[@]}"; do
             sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
+            echo "# ${flag} is not set" >> "$config"
           done
-          grep -q "^CONFIG_KPROBES=y" "$config" || echo "CONFIG_KPROBES=y" >> "$config"
-          grep -q "^CONFIG_HAVE_KPROBES=y" "$config" || echo "CONFIG_HAVE_KPROBES=y" >> "$config"
-          grep -q "^CONFIG_KPROBE_EVENTS=y" "$config" || echo "CONFIG_KPROBE_EVENTS=y" >> "$config"
-          grep -q "^CONFIG_OVERLAY_FS=y" "$config" || echo "CONFIG_OVERLAY_FS=y" >> "$config"
+          # Force Kprobes for KSU
+          grep -q "CONFIG_KPROBES=y" "$config" || echo "CONFIG_KPROBES=y" >> "$config"
         done
 
     - name: Build kernel
       run: |
-        mkdir -p out/vendor/qcom/opensource/mmrm-driver/
-        touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
-        mkdir -p out/target/product/q4q/
+        # THE KILL SWITCHES:
+        export MAKE_GOALS="Image"         # Only compile the kernel Image
+        export SKIP_EXT_MODULES=1        # Skip Techpack (Audio/Camera/Display)
+        export SKIP_VENDOR_BOOT=1        # Don't look for vendor_boot
+        export BUILD_BOOT_IMG=           # Disable boot.img creation
+        export BUILD_VENDOR_BOOT_IMG=    # Disable vendor_boot.img creation
         
-        # SNITCH SCRIPT BYPASS
+        # Kill the external module list in the Samsung script manually
+        sed -i 's/export KBUILD_EXT_MODULES=/#export KBUILD_EXT_MODULES=/g' build_kernel_GKI.sh
+        
+        # Assassinate the config-checker
         find . -type f -name "*.sh" -exec sed -i 's/check_merged_defconfig/true/g' {} +
-        
-        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu -Wno-unused-result" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
+
+        # Fix Host Tool arguments in build.sh
+        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
           kernel_platform/build/build.sh
+        
         export LTO=thin
         bash build_kernel_GKI.sh
 
@@ -154,3 +132,4 @@ jobs:
       with:
         name: Fold4-KSUNext-Image
         path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image
+
