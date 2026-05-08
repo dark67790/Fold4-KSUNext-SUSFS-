@@ -97,10 +97,14 @@ jobs:
     - name: Source Surgery RKP Fix
       run: |
         GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
+
         if [ -f "$GAF_FILE" ]; then
           chmod u+w "$GAF_FILE"
+
           sed -i 's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' "$GAF_FILE"
+
           sed -i 's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' "$GAF_FILE"
+
           echo "Applied integrity fix to $GAF_FILE"
         fi
 
@@ -124,6 +128,7 @@ jobs:
         # 1. Strip security from EVERY config file
         find kernel_platform -type f -name "*defconfig" -o -name "*.config" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
+
           for flag in "${FLAGS[@]}"; do
             sed -i "s/.*${flag}.*/# ${flag} is not set/g" "$config"
           done
@@ -137,6 +142,7 @@ jobs:
         
         # 2. Add KSU flags ONLY ONCE to the base config
         GKI_CONF="kernel_platform/common/arch/arm64/configs/gki_defconfig"
+
         echo "CONFIG_KPROBES=y" >> "$GKI_CONF"
         echo "CONFIG_HAVE_KPROBES=y" >> "$GKI_CONF"
         echo "CONFIG_KPROBE_EVENTS=y" >> "$GKI_CONF"
@@ -154,7 +160,8 @@ jobs:
           kernel_platform/build/build.sh
         
         export LTO=thin
-        bash build_kernel_GKI.sh
+
+        bash kernel_platform/build/build_kernel_GKI.sh
 
     - name: Upload Image
       uses: actions/upload-artifact@v4
