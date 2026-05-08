@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (LTO Warrior V9 - Dual Swap)
+name: Build Fold4 Kernel (Smart ThinLTO - 12GB Swap)
 
 on:
   push:
@@ -13,20 +13,22 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Free disk space & Create 4GB Extra Swap
+    - name: Free Disk Space & Create Monster 12GB Swap
       run: |
-        # 1. Aggressive Cleanup to make room for the swap file
+        echo "Starting aggressive disk cleanup..."
+        # Nuke massive pre-installed packages we don't need to free up ~25GB
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm
+        sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
+        sudo apt-get clean
         
-        # 2. Create an EXTRA 4GB Swap (Renamed to avoid "Text file busy")
-        # 4GB = 4 * 1024 = 4096 MB
-        sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=4096
+        echo "Creating 12GB Swap File..."
+        # 12GB = 12 * 1024 = 12288 MB
+        sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=12288 status=progress
         sudo chmod 600 /swapfile-extra
         sudo mkswap /swapfile-extra
         sudo swapon /swapfile-extra
         
-        # 3. Verify that we now have TWO swap sources
+        echo "Memory and Disk Status:"
         swapon --show
         free -h
         df -h
@@ -69,7 +71,7 @@ jobs:
         printf '#!/bin/bash\nexec /usr/bin/gcc -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nexec /usr/bin/g++ -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-        if [ -f kernel_platform/build/_setup_env.sh ]; then
+        if[ -f kernel_platform/build/_setup_env.sh ]; then
           echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
           echo 'export C_INCLUDE_PATH=/usr/include:/usr/include/x86_64-linux-gnu' >> kernel_platform/build/_setup_env.sh
           echo 'export CPLUS_INCLUDE_PATH=/usr/include:/usr/include/x86_64-linux-gnu' >> kernel_platform/build/_setup_env.sh
@@ -126,13 +128,20 @@ jobs:
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         mkdir -p out/target/product/q4q/
+        
         # Inject custom host tool arguments into the main build script
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' kernel_platform/build/build.sh
+        
+        # ========================================================
+        # THE SMARTER LTO BYPASS (ThinLTO)
+        # Keeps optimizations, uses dramatically less RAM
+        # ========================================================
+        export LTO=thin
+        
         bash build_kernel_GKI.sh
 
     - name: Upload Image
       uses: actions/upload-artifact@v4
       with:
         name: Fold4-KSUNext-Image
-        path: out/msm-waipio-waipio-gki/dist/Image
-
+        path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image
