@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next FINAL)
+name: Build Fold4 Kernel (KSU-Next FINAL PROVEN)
 
 on:
   push:
@@ -48,12 +48,13 @@ jobs:
         curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
         tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
         rm clang.tar.gz
+        
         mkdir -p prebuilts/gas/linux-x86
         curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
         tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
         rm gas.tar.gz
 
-    - name: Setup Host Tools and Sysroot
+    - name: Setup Host Tools and Sysroot (YOUR WORKING METHOD)
       run: |
         chmod -R u+w kernel_platform/build
 
@@ -77,13 +78,12 @@ jobs:
 
         SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
         rm -rf "$SYSROOT"
-        mkdir -p "$SYSROOT/usr"
-        ln -sf /usr/include "$SYSROOT/usr/include"
-        ln -sf /usr/lib "$SYSROOT/usr/lib"
+        mkdir -p "$SYSROOT/usr/lib"
+        ln -sf /usr "$SYSROOT/usr"
         ln -sf /lib "$SYSROOT/lib"
         ln -sf /lib64 "$SYSROOT/lib64"
+        ln -sf /usr/lib/x86_64-linux-gnu "$SYSROOT/usr/lib/x86_64-linux-gnu"
 
-        # FIXED: Added space after 'if'
         if [ -f kernel_platform/build/_setup_env.sh ]; then
           echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
         fi
@@ -104,7 +104,7 @@ jobs:
           echo "Applied integrity fix to $GAF_FILE"
         fi
 
-    - name: Patch Defconfigs (Clean Merge Method)
+    - name: Patch Defconfigs (THE CLEAN MERGE FIX)
       run: |
         FLAGS=(
           "CONFIG_SECURITY_DEFEX"
@@ -121,38 +121,38 @@ jobs:
           "CONFIG_DEBUG_INFO_BTF"
         )
         
-        # Find all config files
-        CONFIGS=$(find kernel_platform -type f -name "*defconfig" -o -name "*.config")
-        
-        for config in $CONFIGS; do
+        # 1. Strip security from EVERY config file
+        find kernel_platform -type f -name "*defconfig" -o -name "*.config" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
-          
-          # 1. Nuke Samsung Security Flags
           for flag in "${FLAGS[@]}"; do
             sed -i "s/.*${flag}.*/# ${flag} is not set/g" "$config"
           done
           
-          # 2. Strip ALL existing KSU flags so we don't create duplicates during merge
+          # Clean existing KSU entries to prevent duplicates in the final merge
           sed -i '/CONFIG_KPROBES/d' "$config"
           sed -i '/CONFIG_HAVE_KPROBES/d' "$config"
           sed -i '/CONFIG_KPROBE_EVENTS/d' "$config"
           sed -i '/CONFIG_OVERLAY_FS/d' "$config"
         done
         
-        # 3. Add KSU flags ONLY to the main gki_defconfig
+        # 2. Add KSU flags ONLY ONCE to the base config
         GKI_CONF="kernel_platform/common/arch/arm64/configs/gki_defconfig"
         echo "CONFIG_KPROBES=y" >> "$GKI_CONF"
         echo "CONFIG_HAVE_KPROBES=y" >> "$GKI_CONF"
         echo "CONFIG_KPROBE_EVENTS=y" >> "$GKI_CONF"
         echo "CONFIG_OVERLAY_FS=y" >> "$GKI_CONF"
 
-    - name: Build kernel
+    - name: Build kernel (YOUR WORKING METHOD)
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         mkdir -p out/target/product/q4q/
-        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
+        
+        sed -i 's/BUILD_TARGET=.*/BUILD_TARGET=q4q_eur_openx/g' kernel_platform/build/build_kernel_GKI.sh
+        
+        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-w -I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
           kernel_platform/build/build.sh
+        
         export LTO=thin
         bash build_kernel_GKI.sh
 
