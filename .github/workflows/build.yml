@@ -59,7 +59,10 @@ jobs:
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
         find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
-        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
+        
+        # ADDED ufdt_apply_overlay to the rm command to clear any broken symlinks first
+        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" "$TOOLS_DIR/ufdt_apply_overlay"
+        
         printf '#!/bin/bash\nexec /usr/bin/gcc -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nexec /usr/bin/g++ -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
