@@ -21,7 +21,7 @@ jobs:
         sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
         sudo apt-get clean
         
-        # Creating a 12GB swap file using dd to avoid "Text file busy" errors
+        # 12GB Swap using dd to prevent "Text file busy"
         sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=12288 status=progress
         sudo chmod 600 /swapfile-extra
         sudo mkswap /swapfile-extra
@@ -114,6 +114,7 @@ jobs:
 
     - name: Build Kernel
       run: |
+        # Inject Host Flags into common build
         sed -i \
           's|TOOL_ARGS+=("LLVM=1")|TOOL_ARGS+=("LLVM=1" "HOSTCFLAGS=-I/usr/include -I/usr/include/x86_64-linux-gnu" "HOSTLDFLAGS=-L/usr/lib/x86_64-linux-gnu")|' \
           kernel_platform/build/build.sh
@@ -128,23 +129,16 @@ jobs:
     - name: Prepare Artifacts
       run: |
         mkdir -p final_out
-        # Grabbing everything starting with "Image" from the out dir
         find kernel_platform/out/android12-5.10/ -name "Image*" -exec cp {} final_out/ \;
-        echo "Artifacts ready:"
         ls -lh final_out/
 
     - name: Upload to GoFile
       run: |
-        # Use jq to pick the best server
         SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
-        echo "Uploading to GoFile server: $SERVER"
         for file in final_out/*; do
           RESPONSE=$(curl -F "file=@$file" "https://$SERVER.gofile.io/contents/uploadfile")
           DOWNLOAD_LINK=$(echo $RESPONSE | jq -r '.data.downloadPage')
-          echo "--------------------------------------------------"
-          echo "✅ File: $(basename $file)"
-          echo "🔗 Link: $DOWNLOAD_LINK"
-          echo "--------------------------------------------------"
+          echo "✅ File: $(basename $file) - Link: $DOWNLOAD_LINK"
         done
 
     - name: Upload to GitHub Release
@@ -154,7 +148,7 @@ jobs:
         tag_name: build-${{ github.run_id }}
         name: Fold4 Thin-LTO Build ${{ github.run_id }}
         files: final_out/*
-        body: "Fold4 Kernel with KernelSU-Next and Thin LTO enabled."
+        body: "Fold4 Common Kernel with KernelSU-Next and Thin LTO enabled."
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
