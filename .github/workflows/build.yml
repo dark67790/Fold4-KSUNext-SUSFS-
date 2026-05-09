@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (Stock)
+name: Build Fold4 Kernel (KSU-Next)
 
 on:
   push:
@@ -44,6 +44,12 @@ jobs:
         sed -i 's/BUILD_TARGET=q4q_kor_singlex/BUILD_TARGET=q4q_eur_openx/g' \
           build_kernel_GKI.sh
         grep "BUILD_TARGET" build_kernel_GKI.sh
+
+    - name: Setup KernelSU-Next
+      working-directory: kernel_platform/common
+      run: |
+        chmod -R u+w .
+        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
     - name: Download Clang and GAS
       run: |
@@ -129,5 +135,5 @@ jobs:
     - name: Upload to GitHub Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-Stock-Image
+        name: Fold4-KSUNext-Image
         path: artifacts/
