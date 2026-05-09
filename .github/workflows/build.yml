@@ -57,7 +57,7 @@ jobs:
         run: |
           pip install gdown
 
-          gdown --id 1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2- -O samsung.zip
+          gdown "https://drive.google.com/uc?id=1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2-" -O samsung.zip
 
           unzip samsung.zip
 
@@ -216,6 +216,11 @@ jobs:
           touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
 
           mkdir -p out/target/product/q4q/
+
+          # Force Korean source to build as Global/EUR
+          sed -i \
+            's/BUILD_TARGET=q4q_kor_singlex/BUILD_TARGET=q4q_eur_openx/g' \
+            build_kernel_GKI.sh
 
           sed -i \
             's/BUILD_TARGET=.*/BUILD_TARGET=q4q_eur_openx/g' \
