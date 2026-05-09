@@ -31,8 +31,8 @@ jobs:
     - name: Download and Extract Samsung Source
       run: |
         pip install gdown
-        # Updated with your new File ID (including the trailing hyphen)
-        gdown --confirm 1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2- -O samsung.zip
+        # Updated ID: Note the '-' at the end from your new link
+        gdown 1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2- -O samsung.zip
         unzip samsung.zip
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
@@ -167,3 +167,4 @@ jobs:
       with:
         name: Fold4-KSUNext-Kernel
         path: artifacts/
+
