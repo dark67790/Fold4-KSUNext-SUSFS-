@@ -27,7 +27,22 @@ jobs:
     - name: 2. Install Ubuntu Dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils curl build-essential cpio wget python3
+        sudo apt install -y \
+          bc \
+          bison \
+          flex \
+          libssl-dev \
+          libelf-dev \
+          python3-pip \
+          unzip \
+          git \
+          patch \
+          coreutils \
+          curl \
+          build-essential \
+          cpio \
+          wget \
+          python3
 
     - name: 3. Download Samsung Source
       run: |
@@ -36,6 +51,7 @@ jobs:
         gdown "https://drive.google.com/uc?id=1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2-" -O samsung.zip
 
         unzip samsung.zip
+
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
 
@@ -71,7 +87,10 @@ jobs:
           -exec ln -sf {} "$TOOLS_DIR/" \;
 
         # Gag Ubuntu's strict GCC compiler to prevent false-positive warnings
-        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
+        rm -f \
+          "$TOOLS_DIR/gcc" \
+          "$TOOLS_DIR/g++" \
+          "$TOOLS_DIR/ufdt_apply_overlay"
 
         printf '#!/bin/bash\nexec /usr/bin/gcc -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' \
           > "$TOOLS_DIR/gcc"
@@ -80,8 +99,15 @@ jobs:
           > "$TOOLS_DIR/g++"
 
         # Ghost tool to bypass useless DTB merging
-        printf '#!/bin/bash\nif [ "$#" -ge 2 ]; then cp "$1" "${@: -1}"; fi\nexit 0\n' \
-          > "$TOOLS_DIR/ufdt_apply_overlay"
+        cat > "$TOOLS_DIR/ufdt_apply_overlay" << 'EOF'
+        #!/bin/bash
+
+        if [ "$#" -ge 2 ]; then
+          cp "$1" "${@: -1}" 2>/dev/null || true
+        fi
+
+        exit 0
+        EOF
 
         chmod +x \
           "$TOOLS_DIR/gcc" \
