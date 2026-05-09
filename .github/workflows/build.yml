@@ -99,7 +99,7 @@ jobs:
           echo "Applied integrity fix to $GAF_FILE"
         fi
 
-    - name: Patch Defconfigs
+    - name: Patch Defconfigs and Build Configs
       run: |
         FLAGS=(
           "CONFIG_SECURITY_DEFEX"
@@ -114,6 +114,10 @@ jobs:
           "CONFIG_RKP_TEST"
           "CONFIG_KNOX_KAP"
           "CONFIG_DEBUG_INFO_BTF"
+          "CONFIG_LTO"
+          "CONFIG_LTO_CLANG"
+          "CONFIG_LTO_CLANG_THIN"
+          "CONFIG_LTO_CLANG_FULL"
         )
         find kernel_platform -type f -name "*defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
@@ -124,6 +128,15 @@ jobs:
           grep -q "^CONFIG_HAVE_KPROBES=y" "$config" || echo "CONFIG_HAVE_KPROBES=y" >> "$config"
           grep -q "^CONFIG_KPROBE_EVENTS=y" "$config" || echo "CONFIG_KPROBE_EVENTS=y" >> "$config"
           grep -q "^CONFIG_OVERLAY_FS=y" "$config" || echo "CONFIG_OVERLAY_FS=y" >> "$config"
+          grep -q "^CONFIG_LTO_NONE=y" "$config" || echo "CONFIG_LTO_NONE=y" >> "$config"
+        done
+
+        find kernel_platform -type f -name "build.config*" | while read -r cfg; do
+          if grep -q "MAKE_GOALS" "$cfg"; then
+            chmod u+w "$cfg"
+            sed -i 's/^MAKE_GOALS=.*/MAKE_GOALS="Image"/' "$cfg"
+            echo "Patched MAKE_GOALS in $cfg"
+          fi
         done
 
     - name: Build kernel
@@ -139,10 +152,9 @@ jobs:
           's|TOOL_ARGS+=("LLVM=1")|TOOL_ARGS+=("LLVM=1" "HOSTCC=/usr/bin/gcc" "HOSTCXX=/usr/bin/g++" "HOSTCFLAGS=-I/usr/include -I/usr/include/x86_64-linux-gnu" "HOSTLDFLAGS=-L/usr/lib/x86_64-linux-gnu")|' \
           kernel_platform/build/build.sh
 
-        # Overrides MAKE_GOALS inside build.sh after all build configs are
-        # sourced, so it wins regardless of what the configs set
         export POST_DEFCONFIG_CMDS="MAKE_GOALS='Image'"
         export SKIP_EXT_MODULES=1
+        export LTO=none
 
         bash build_kernel_GKI.sh
 
