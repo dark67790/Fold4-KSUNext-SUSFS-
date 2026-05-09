@@ -15,21 +15,17 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Free Disk Space
+    - name: Free Disk Space and Create 12GB Swap
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
         sudo apt-get clean
-
-    - name: Set up 8GB Swap Space
-      run: |
-        echo "Allocating 8GB swap file..."
-        sudo fallocate -l 8G /swapfile
-        sudo chmod 600 /swapfile
-        sudo mkswap /swapfile
-        sudo swapon /swapfile
-        # Set swappiness to 10 to prefer physical RAM but use swap when desperate
-        sudo sysctl vm.swappiness=10
+        
+        # Creating a 12GB swap file using dd to avoid "Text file busy" errors
+        sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=12288 status=progress
+        sudo chmod 600 /swapfile-extra
+        sudo mkswap /swapfile-extra
+        sudo swapon /swapfile-extra
         free -h
 
     - name: Install dependencies
@@ -107,7 +103,7 @@ jobs:
           for flag in "${FLAGS[@]}"; do
             sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
           done
-          # Enable Thin LTO and KSU requirements
+          # Force Thin LTO and KSU support
           echo "CONFIG_LTO_CLANG=y" >> "$config"
           echo "CONFIG_LTO_CLANG_THIN=y" >> "$config"
           echo "CONFIG_KPROBES=y" >> "$config"
@@ -132,20 +128,22 @@ jobs:
     - name: Prepare Artifacts
       run: |
         mkdir -p final_out
+        # Grabbing everything starting with "Image" from the out dir
         find kernel_platform/out/android12-5.10/ -name "Image*" -exec cp {} final_out/ \;
-        echo "Files collected for upload:"
+        echo "Artifacts ready:"
         ls -lh final_out/
 
     - name: Upload to GoFile
       run: |
+        # Use jq to pick the best server
         SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
         echo "Uploading to GoFile server: $SERVER"
         for file in final_out/*; do
           RESPONSE=$(curl -F "file=@$file" "https://$SERVER.gofile.io/contents/uploadfile")
-          DOWNLOAD_PAGE=$(echo $RESPONSE | jq -r '.data.downloadPage')
+          DOWNLOAD_LINK=$(echo $RESPONSE | jq -r '.data.downloadPage')
           echo "--------------------------------------------------"
-          echo "✅ Uploaded: $(basename $file)"
-          echo "🔗 Download Link: $DOWNLOAD_PAGE"
+          echo "✅ File: $(basename $file)"
+          echo "🔗 Link: $DOWNLOAD_LINK"
           echo "--------------------------------------------------"
         done
 
@@ -154,14 +152,14 @@ jobs:
       if: success()
       with:
         tag_name: build-${{ github.run_id }}
-        name: Kernel Build ${{ github.run_id }}
+        name: Fold4 Thin-LTO Build ${{ github.run_id }}
         files: final_out/*
-        body: "Automated Build for Fold4 Kernel with Thin LTO & KSU-Next. Check logs for GoFile links."
+        body: "Fold4 Kernel with KernelSU-Next and Thin LTO enabled."
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-KSUNext-Kernel
+        name: Fold4-Kernel-ThinLTO
         path: final_out/*
