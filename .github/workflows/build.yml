@@ -114,11 +114,12 @@ jobs:
           's|TOOL_ARGS+=("LLVM=1")|TOOL_ARGS+=("LLVM=1" "HOSTCFLAGS=-I/usr/include -I/usr/include/x86_64-linux-gnu" "HOSTLDFLAGS=-L/usr/lib/x86_64-linux-gnu")|' \
           kernel_platform/build/build.sh
 
+        # Exports to handle Symbol Lists, LTO, and build cleaning
+        export KMI_SYMBOL_LIST_STRICT_MODE=0
         export SKIP_MRPROPER=1
         export LTO=none
 
         cd kernel_platform
-        # Directly target the GKI config to produce a clean Image
         BUILD_CONFIG=common/build.config.gki.aarch64 ./build/build.sh
 
     - name: Verify Image
@@ -135,4 +136,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Fold4-KSUNext-Image
-        path: kernel_platform/out/**/dist/Image
+        path: kernel_platform/out/android12-5.10/common/dist/Image
