@@ -13,15 +13,11 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Free Disk Space and Create Swap
+    - name: Free Disk Space
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
         sudo apt-get clean
-        sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=12288 status=progress
-        sudo chmod 600 /swapfile-extra
-        sudo mkswap /swapfile-extra
-        sudo swapon /swapfile-extra
 
     - name: Install dependencies
       run: |
@@ -50,27 +46,28 @@ jobs:
         tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
         rm gas.tar.gz
 
-    - name: Setup Host Tools
+    - name: Setup Host Tools and Sysroot
       run: |
         chmod -R u+w kernel_platform/build
+
+        # Hermetic tools dir — build utilities only, no gcc/g++
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
-
-        # Populate hermetic tools dir with system BUILD UTILITIES only
-        # (make, nproc, sed, awk, find, etc.) — NOT gcc/g++.
-        # All compilation goes through Google's prebuilt clang via LLVM=1.
         find /usr/bin /bin -maxdepth 1 \( -type f -o -type l \) -executable \
           -exec ln -sf {} "$TOOLS_DIR/" \;
-
-        # Remove any system gcc/g++ that landed in the tools dir — we do not
-        # want the build system accidentally falling back to them.
         rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" \
               "$TOOLS_DIR/gcc-"* "$TOOLS_DIR/g++-"* \
               "$TOOLS_DIR/cc" "$TOOLS_DIR/c++"
 
-        # _setup_env.sh is sourced by build.sh and locks PATH to the hermetic
-        # prebuilt dirs. Appending here keeps /usr/bin and /bin alive for
-        # build script utilities (nproc, readlink, sed, tr, etc.).
+        # Sysroot — clang uses --sysroot= for host tool compilation (DTC etc.)
+        # Must be a real directory with headers, not just symlinks to parent
+        SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
+        mkdir -p "$SYSROOT/usr/include" "$SYSROOT/usr/lib" "$SYSROOT/lib64"
+        cp -a /usr/include/. "$SYSROOT/usr/include/"
+        cp -a /usr/lib/x86_64-linux-gnu/. "$SYSROOT/usr/lib/"
+        ln -sf /lib/x86_64-linux-gnu "$SYSROOT/lib64"
+
+        # Keep /usr/bin and /bin alive after hermetic PATH lockdown
         if [ -f kernel_platform/build/_setup_env.sh ]; then
           chmod u+w kernel_platform/build/_setup_env.sh
           echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
@@ -99,7 +96,8 @@ jobs:
           "CONFIG_KNOX_KAP" "CONFIG_LTO" "CONFIG_LTO_CLANG"
           "CONFIG_LTO_CLANG_THIN" "CONFIG_LTO_CLANG_FULL" "CONFIG_DEBUG_INFO_BTF"
         )
-        find kernel_platform -type f -name "*defconfig" | while read -r config; do
+        # Only patch common/ defconfigs — that's the only kernel we're building
+        find kernel_platform/common -type f -name "*defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           for flag in "${FLAGS[@]}"; do
             sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
@@ -113,27 +111,17 @@ jobs:
 
     - name: Build Kernel
       run: |
-        # Fix unused-result warning in Samsung cc-wrapper
-        sed -i 's/write(STDERR_FILENO, buf, len);/(void)write(STDERR_FILENO, buf, len);/' \
-          kernel_platform/msm-kernel/scripts/basic/cc-wrapper.c
-
-        # LLVM=1 already makes clang the HOSTCC (build.sh line 695-705).
-        # We only need HOSTCFLAGS/HOSTLDFLAGS so the prebuilt clang can
-        # locate Ubuntu's system headers and libs for host tool compilation.
-        # No HOSTCC override — prebuilt clang handles everything.
         sed -i \
           's|TOOL_ARGS+=("LLVM=1")|TOOL_ARGS+=("LLVM=1" "HOSTCFLAGS=-I/usr/include -I/usr/include/x86_64-linux-gnu" "HOSTLDFLAGS=-L/usr/lib/x86_64-linux-gnu")|' \
           kernel_platform/build/build.sh
 
-        # POST_DEFCONFIG_CMDS is eval'd inside build.sh after all configs are
-        # sourced — the only safe override point for MAKE_GOALS.
-        export POST_DEFCONFIG_CMDS="MAKE_GOALS='Image'"
-        export SKIP_EXT_MODULES=1
         export SKIP_MRPROPER=1
         export LTO=none
 
         cd kernel_platform
-        BUILD_CONFIG=msm-kernel/build.config.msm.waipio.sec ./build/build.sh
+        # Build common/ GKI kernel only — no msm-kernel second phase,
+        # no DTC, no external modules, just the Image
+        BUILD_CONFIG=common/build.config.gki.aarch64 ./build/build.sh
 
     - name: Verify Image
       run: |
