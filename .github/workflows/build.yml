@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
 
     steps:
     - name: Checkout
@@ -19,11 +21,22 @@ jobs:
         sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
         sudo apt-get clean
 
+    - name: Set up 8GB Swap Space
+      run: |
+        echo "Allocating 8GB swap file..."
+        sudo fallocate -l 8G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        # Set swappiness to 10 to prefer physical RAM but use swap when desperate
+        sudo sysctl vm.swappiness=10
+        free -h
+
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y bc bison flex libssl-dev libelf-dev \
-          python3-pip unzip git patch coreutils curl build-essential cpio wget
+          python3-pip unzip git patch coreutils curl build-essential cpio wget jq
 
     - name: Download and Extract Samsung Source
       run: |
@@ -49,17 +62,11 @@ jobs:
     - name: Setup Host Tools and Sysroot
       run: |
         chmod -R u+w kernel_platform/build
-
-        # Hermetic tools dir — build utilities only, no gcc/g++
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
-        find /usr/bin /bin -maxdepth 1 \( -type f -o -type l \) -executable \
-          -exec ln -sf {} "$TOOLS_DIR/" \;
-        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" \
-              "$TOOLS_DIR/gcc-"* "$TOOLS_DIR/g++-"* \
-              "$TOOLS_DIR/cc" "$TOOLS_DIR/c++"
+        find /usr/bin /bin -maxdepth 1 \( -type f -o -type l \) -executable -exec ln -sf {} "$TOOLS_DIR/" \;
+        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" "$TOOLS_DIR/gcc-"* "$TOOLS_DIR/g++-"* "$TOOLS_DIR/cc" "$TOOLS_DIR/c++"
 
-        # Sysroot setup with requested cleanup
         SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
         rm -rf "$SYSROOT"
         mkdir -p "$SYSROOT/usr/include" "$SYSROOT/usr/lib" "$SYSROOT/lib64"
@@ -67,7 +74,6 @@ jobs:
         cp -a /usr/lib/x86_64-linux-gnu/. "$SYSROOT/usr/lib/"
         ln -sf /lib/x86_64-linux-gnu "$SYSROOT/lib64"
 
-        # Keep /usr/bin and /bin alive after hermetic PATH lockdown
         if [ -f kernel_platform/build/_setup_env.sh ]; then
           chmod u+w kernel_platform/build/_setup_env.sh
           echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
@@ -101,7 +107,9 @@ jobs:
           for flag in "${FLAGS[@]}"; do
             sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
           done
-          echo "CONFIG_LTO_NONE=y" >> "$config"
+          # Enable Thin LTO and KSU requirements
+          echo "CONFIG_LTO_CLANG=y" >> "$config"
+          echo "CONFIG_LTO_CLANG_THIN=y" >> "$config"
           echo "CONFIG_KPROBES=y" >> "$config"
           echo "CONFIG_HAVE_KPROBES=y" >> "$config"
           echo "CONFIG_KPROBE_EVENTS=y" >> "$config"
@@ -114,26 +122,46 @@ jobs:
           's|TOOL_ARGS+=("LLVM=1")|TOOL_ARGS+=("LLVM=1" "HOSTCFLAGS=-I/usr/include -I/usr/include/x86_64-linux-gnu" "HOSTLDFLAGS=-L/usr/lib/x86_64-linux-gnu")|' \
           kernel_platform/build/build.sh
 
-        # Exports to handle Symbol Lists, LTO, and build cleaning
         export KMI_SYMBOL_LIST_STRICT_MODE=0
         export SKIP_MRPROPER=1
-        export LTO=none
+        export LTO=thin
 
         cd kernel_platform
         BUILD_CONFIG=common/build.config.gki.aarch64 ./build/build.sh
 
-    - name: Verify Image
+    - name: Prepare Artifacts
       run: |
-        IMAGE_PATH=$(find kernel_platform/out -name "Image" 2>/dev/null | head -n 1)
-        if [ -f "$IMAGE_PATH" ]; then
-          echo "✅ Image found: $(du -h "$IMAGE_PATH")"
-        else
-          echo "❌ Image not found"
-          exit 1
-        fi
+        mkdir -p final_out
+        find kernel_platform/out/android12-5.10/ -name "Image*" -exec cp {} final_out/ \;
+        echo "Files collected for upload:"
+        ls -lh final_out/
+
+    - name: Upload to GoFile
+      run: |
+        SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
+        echo "Uploading to GoFile server: $SERVER"
+        for file in final_out/*; do
+          RESPONSE=$(curl -F "file=@$file" "https://$SERVER.gofile.io/contents/uploadfile")
+          DOWNLOAD_PAGE=$(echo $RESPONSE | jq -r '.data.downloadPage')
+          echo "--------------------------------------------------"
+          echo "✅ Uploaded: $(basename $file)"
+          echo "🔗 Download Link: $DOWNLOAD_PAGE"
+          echo "--------------------------------------------------"
+        done
+
+    - name: Upload to GitHub Release
+      uses: softprops/action-gh-release@v2
+      if: success()
+      with:
+        tag_name: build-${{ github.run_id }}
+        name: Kernel Build ${{ github.run_id }}
+        files: final_out/*
+        body: "Automated Build for Fold4 Kernel with Thin LTO & KSU-Next. Check logs for GoFile links."
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-KSUNext-Image
-        path: kernel_platform/out/android12-5.10/common/dist/Image
+        name: Fold4-KSUNext-Kernel
+        path: final_out/*
