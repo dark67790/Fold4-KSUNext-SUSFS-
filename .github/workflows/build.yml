@@ -31,7 +31,8 @@ jobs:
     - name: Download and Extract Samsung Source
       run: |
         pip install gdown
-        gdown 1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2 -O samsung.zip
+        # Updated with your new File ID (including the trailing hyphen)
+        gdown --confirm 1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2- -O samsung.zip
         unzip samsung.zip
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
@@ -131,7 +132,6 @@ jobs:
         export LTO=none
 
         cd kernel_platform
-        # || true so phase 2 failures don't kill the job after Image is built
         BUILD_CONFIG=msm-kernel/build.config.msm.waipio.sec ./build/build.sh || true
 
     - name: Upload Image to GoFile immediately
@@ -158,7 +158,6 @@ jobs:
           echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
         fi
 
-        # Stage for artifact upload
         mkdir -p artifacts
         cp "$IMAGE" artifacts/Image
         [ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4
