@@ -1,6 +1,11 @@
 name: Build Fold4 Kernel (KSU-Next FINAL)
 
 on:
+  push:
+    branches:
+      - main
+      - master
+
   workflow_dispatch:
 
 jobs:
@@ -216,7 +221,6 @@ jobs:
             's/BUILD_TARGET=.*/BUILD_TARGET=q4q_eur_openx/g' \
             build_kernel_GKI.sh
 
-          # Syntax fix for multi-line module block
           sed -i \
             '/export KBUILD_EXT_MODULES=/,/\"/ s/^/#/' \
             build_kernel_GKI.sh
@@ -225,7 +229,6 @@ jobs:
             's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-w -I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
             kernel_platform/build/build.sh
 
-          # ASSASSINATE THE SNITCH SCRIPTS
           find kernel_platform -type f -name "build.config.*" \
             -exec sed -i 's/check_merged_defconfig.*/true/g' {} +
 
