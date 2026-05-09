@@ -1,241 +1,265 @@
-steps:
-- name: Checkout
-  uses: actions/checkout@v4
+name: Build Fold4 Kernel (KSU-Next FINAL)
 
-- name: Free Disk Space and Create Swap
-  run: |
-    sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-    sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
-    sudo apt-get clean
-    sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=12288 status=progress
-    sudo chmod 600 /swapfile-extra
-    sudo mkswap /swapfile-extra
-    sudo swapon /swapfile-extra
-    swapon --show
-    free -h
-    df -h
+on:
+  workflow_dispatch:
 
-- name: Install dependencies
-  run: |
-    sudo apt update
-    sudo apt install -y bc bison flex libssl-dev libelf-dev \
-      python3-pip unzip git patch coreutils curl build-essential \
-      cpio wget python3
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
 
-- name: Download and Extract Samsung Source
-  run: |
-    pip install gdown
-    
-    # New Drive Link
-    gdown 1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2- -O samsung.zip
-    
-    unzip samsung.zip
-    tar -xf Kernel.tar.gz
-    tar -xf Platform.tar.gz
-    
-    rm -f samsung.zip Kernel.tar.gz Platform.tar.gz
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-- name: Download Clang and GAS
-  run: |
-    cd kernel_platform
-    
-    mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
-    
-    curl -LSs \
-      "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" \
-      -o clang.tar.gz
-    
-    tar -xzf clang.tar.gz \
-      -C prebuilts-master/clang/host/linux-x86/clang-r416183b
-    
-    rm -f clang.tar.gz
+      - name: Free Disk Space and Create Swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
+          sudo apt-get clean
 
-    mkdir -p prebuilts/gas/linux-x86
-    
-    curl -LSs \
-      "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" \
-      -o gas.tar.gz
-    
-    tar -xzf gas.tar.gz \
-      -C prebuilts/gas/linux-x86
-    
-    rm -f gas.tar.gz
+          sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=12288 status=progress
+          sudo chmod 600 /swapfile-extra
+          sudo mkswap /swapfile-extra
+          sudo swapon /swapfile-extra
 
-- name: Setup Host Tools and Sysroot (GOD-MODE & GHOST TOOL)
-  run: |
-    TOOLS_DIR="$(pwd)/kernel_platform/build/build-tools/path/linux-x86"
-    
-    rm -rf "$TOOLS_DIR"
-    mkdir -p "$TOOLS_DIR"
+          swapon --show
+          free -h
+          df -h
 
-    chmod -R u+w kernel_platform/build
+      - name: Install dependencies
+        run: |
+          sudo apt update
 
-    find /usr/bin /bin -maxdepth 1 -type f -executable \
-      -exec ln -sf {} "$TOOLS_DIR/" \;
+          sudo apt install -y \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            python3-pip \
+            unzip \
+            git \
+            patch \
+            coreutils \
+            curl \
+            build-essential \
+            cpio \
+            wget \
+            python3
 
-    rm -f \
-      "$TOOLS_DIR/gcc" \
-      "$TOOLS_DIR/g++" \
-      "$TOOLS_DIR/ufdt_apply_overlay"
+      - name: Download and Extract Samsung Source
+        run: |
+          pip install gdown
 
-    printf '#!/bin/bash\nexec /usr/bin/gcc -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' \
-      > "$TOOLS_DIR/gcc"
+          gdown --id 1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2- -O samsung.zip
 
-    printf '#!/bin/bash\nexec /usr/bin/g++ -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' \
-      > "$TOOLS_DIR/g++"
+          unzip samsung.zip
 
-    printf '#!/bin/bash\nif [ "$#" -ge 2 ]; then cp "$1" "${@: -1}"; fi\nexit 0\n' \
-      > "$TOOLS_DIR/ufdt_apply_overlay"
+          tar -xf Kernel.tar.gz
+          tar -xf Platform.tar.gz
 
-    chmod +x \
-      "$TOOLS_DIR/gcc" \
-      "$TOOLS_DIR/g++" \
-      "$TOOLS_DIR/ufdt_apply_overlay"
+          rm -f samsung.zip Kernel.tar.gz Platform.tar.gz
 
-    KBT="$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64"
+      - name: Download Clang and GAS
+        run: |
+          cd kernel_platform
 
-    mkdir -p "$KBT"
+          mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
 
-    cp /usr/lib/x86_64-linux-gnu/crt1.o "$KBT/" 2>/dev/null || true
-    cp /usr/lib/x86_64-linux-gnu/crti.o "$KBT/" 2>/dev/null || true
-    cp /usr/lib/x86_64-linux-gnu/crtn.o "$KBT/" 2>/dev/null || true
-    cp /usr/lib/x86_64-linux-gnu/Scrt1.o "$KBT/" 2>/dev/null || true
+          curl -LSs \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" \
+            -o clang.tar.gz
 
-    ln -sf /usr/lib/x86_64-linux-gnu/libc.so.6 "$KBT/libc.so.6"
+          tar -xzf clang.tar.gz \
+            -C prebuilts-master/clang/host/linux-x86/clang-r416183b
 
-    echo "GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a )" \
-      > "$KBT/libc.so"
+          rm -f clang.tar.gz
 
-    SYSROOT="$(pwd)/kernel_platform/build/build-tools/sysroot"
+          mkdir -p prebuilts/gas/linux-x86
 
-    rm -rf "$SYSROOT"
-    ln -snf / "$SYSROOT"
+          curl -LSs \
+            "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" \
+            -o gas.tar.gz
 
-    if [ -f kernel_platform/build/_setup_env.sh ]; then
-      echo 'export PATH=$PATH:/usr/bin:/bin' \
-        >> kernel_platform/build/_setup_env.sh
-    fi
+          tar -xzf gas.tar.gz \
+            -C prebuilts/gas/linux-x86
 
-- name: Setup KernelSU-Next
-  working-directory: kernel_platform/common
-  run: |
-    chmod -R u+w .
-    
-    curl -LSs \
-      "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
-      | bash -
+          rm -f gas.tar.gz
 
-- name: Source Surgery RKP Fix
-  run: |
-    GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
+      - name: Setup Host Tools and Sysroot (GOD-MODE & GHOST TOOL)
+        run: |
+          TOOLS_DIR="$(pwd)/kernel_platform/build/build-tools/path/linux-x86"
 
-    if [ -f "$GAF_FILE" ]; then
-      chmod u+w "$GAF_FILE"
+          rm -rf "$TOOLS_DIR"
+          mkdir -p "$TOOLS_DIR"
 
-      sed -i \
-        's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' \
-        "$GAF_FILE"
+          chmod -R u+w kernel_platform/build
 
-      sed -i \
-        's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' \
-        "$GAF_FILE"
-    fi
+          find /usr/bin /bin -maxdepth 1 -type f -executable \
+            -exec ln -sf {} "$TOOLS_DIR/" \;
 
-- name: Patch Defconfigs (CLEAN MERGE + MODPOST FIX)
-  run: |
-    FLAGS=(
-      "CONFIG_SECURITY_DEFEX"
-      "CONFIG_PROCA"
-      "CONFIG_FIVE"
-      "CONFIG_UH"
-      "CONFIG_RKP"
-      "CONFIG_KDP"
-      "CONFIG_KDP_CRED"
-      "CONFIG_KDP_NS"
-      "CONFIG_KDP_TEST"
-      "CONFIG_RKP_TEST"
-      "CONFIG_KNOX_KAP"
-      "CONFIG_DEBUG_INFO_BTF"
-      "CONFIG_SEC_DEBUG_AP_CONTEXT"
-    )
+          rm -f \
+            "$TOOLS_DIR/gcc" \
+            "$TOOLS_DIR/g++" \
+            "$TOOLS_DIR/ufdt_apply_overlay"
 
-    find kernel_platform -type f \( -name "*defconfig" -o -name "*.config" \) | while read -r config; do
-      chmod u+w "$config" 2>/dev/null || true
+          printf '#!/bin/bash\nexec /usr/bin/gcc -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' \
+            > "$TOOLS_DIR/gcc"
 
-      for flag in "${FLAGS[@]}"; do
-        sed -i "s/.*${flag}.*/# ${flag} is not set/g" "$config"
-      done
+          printf '#!/bin/bash\nexec /usr/bin/g++ -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' \
+            > "$TOOLS_DIR/g++"
 
-      sed -i '/CONFIG_KPROBES/d' "$config"
-      sed -i '/CONFIG_HAVE_KPROBES/d' "$config"
-      sed -i '/CONFIG_KPROBE_EVENTS/d' "$config"
-      sed -i '/CONFIG_OVERLAY_FS/d' "$config"
-    done
+          printf '#!/bin/bash\nif [ "$#" -ge 2 ]; then cp "$1" "${@: -1}"; fi\nexit 0\n' \
+            > "$TOOLS_DIR/ufdt_apply_overlay"
 
-    GKI_CONF="kernel_platform/common/arch/arm64/configs/gki_defconfig"
+          chmod +x \
+            "$TOOLS_DIR/gcc" \
+            "$TOOLS_DIR/g++" \
+            "$TOOLS_DIR/ufdt_apply_overlay"
 
-    echo "CONFIG_KPROBES=y" >> "$GKI_CONF"
-    echo "CONFIG_HAVE_KPROBES=y" >> "$GKI_CONF"
-    echo "CONFIG_KPROBE_EVENTS=y" >> "$GKI_CONF"
-    echo "CONFIG_OVERLAY_FS=y" >> "$GKI_CONF"
+          KBT="$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64"
 
-- name: Build kernel
-  run: |
-    mkdir -p out/vendor/qcom/opensource/mmrm-driver/
-    touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
+          mkdir -p "$KBT"
 
-    mkdir -p out/target/product/q4q/
+          cp /usr/lib/x86_64-linux-gnu/crt1.o "$KBT/" 2>/dev/null || true
+          cp /usr/lib/x86_64-linux-gnu/crti.o "$KBT/" 2>/dev/null || true
+          cp /usr/lib/x86_64-linux-gnu/crtn.o "$KBT/" 2>/dev/null || true
+          cp /usr/lib/x86_64-linux-gnu/Scrt1.o "$KBT/" 2>/dev/null || true
 
-    sed -i \
-      's/BUILD_TARGET=.*/BUILD_TARGET=q4q_eur_openx/g' \
-      build_kernel_GKI.sh
+          ln -sf /usr/lib/x86_64-linux-gnu/libc.so.6 "$KBT/libc.so.6"
 
-    # Syntax fix for multi-line module block
-    sed -i \
-      '/export KBUILD_EXT_MODULES=/,/\"/ s/^/#/' \
-      build_kernel_GKI.sh
+          echo "GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a )" \
+            > "$KBT/libc.so"
 
-    sed -i \
-      's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-w -I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
-      kernel_platform/build/build.sh
+          SYSROOT="$(pwd)/kernel_platform/build/build-tools/sysroot"
 
-    # ========================================================
-    # ASSASSINATE THE SNITCH SCRIPTS
-    # ========================================================
-    find kernel_platform -type f -name "build.config.*" \
-      -exec sed -i 's/check_merged_defconfig/true/g' {} +
+          rm -rf "$SYSROOT"
+          ln -snf / "$SYSROOT"
 
-    find kernel_platform -type f -name "build.config.*" \
-      -exec sed -i 's/sanity_check_abi/true/g' {} +
+          if [ -f kernel_platform/build/_setup_env.sh ]; then
+            echo 'export PATH=$PATH:/usr/bin:/bin' \
+              >> kernel_platform/build/_setup_env.sh
+          fi
 
-    export LTO=thin
+      - name: Setup KernelSU-Next
+        working-directory: kernel_platform/common
+        run: |
+          chmod -R u+w .
 
-    bash build_kernel_GKI.sh
+          curl -LSs \
+            "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
+            | bash -
 
-- name: Upload Image Immediately
-  if: always()
-  run: |
-    IMAGE=$(find kernel_platform/out -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
+      - name: Source Surgery RKP Fix
+        run: |
+          GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
 
-    if [ -f "$IMAGE" ]; then
-      echo "Found Image: $IMAGE"
+          if [ -f "$GAF_FILE" ]; then
+            chmod u+w "$GAF_FILE"
 
-      SERVER=$(curl -s https://api.gofile.io/servers | \
-        python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
+            sed -i \
+              's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' \
+              "$GAF_FILE"
 
-      RESP=$(curl -s -F "file=@$IMAGE" \
-        "https://$SERVER.gofile.io/uploadFile")
+            sed -i \
+              's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' \
+              "$GAF_FILE"
+          fi
 
-      echo "✅ Image Upload:"
-      
-      echo "$RESP" | python3 -c \
-        "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])"
-    else
-      echo "❌ No Image file found"
-    fi
+      - name: Patch Defconfigs (CLEAN MERGE + MODPOST FIX)
+        run: |
+          FLAGS=(
+            "CONFIG_SECURITY_DEFEX"
+            "CONFIG_PROCA"
+            "CONFIG_FIVE"
+            "CONFIG_UH"
+            "CONFIG_RKP"
+            "CONFIG_KDP"
+            "CONFIG_KDP_CRED"
+            "CONFIG_KDP_NS"
+            "CONFIG_KDP_TEST"
+            "CONFIG_RKP_TEST"
+            "CONFIG_KNOX_KAP"
+            "CONFIG_DEBUG_INFO_BTF"
+            "CONFIG_SEC_DEBUG_AP_CONTEXT"
+          )
 
-- name: Upload Image
-  uses: actions/upload-artifact@v4
-  with:
-    name: Fold4-KSUNext-Image
-    path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image*
+          find kernel_platform -type f \( -name "*defconfig" -o -name "*.config" \) | while read -r config; do
+            chmod u+w "$config" 2>/dev/null || true
+
+            for flag in "${FLAGS[@]}"; do
+              sed -i "s/.*${flag}.*/# ${flag} is not set/g" "$config"
+            done
+
+            sed -i '/CONFIG_KPROBES/d' "$config"
+            sed -i '/CONFIG_HAVE_KPROBES/d' "$config"
+            sed -i '/CONFIG_KPROBE_EVENTS/d' "$config"
+            sed -i '/CONFIG_OVERLAY_FS/d' "$config"
+          done
+
+          GKI_CONF="kernel_platform/common/arch/arm64/configs/gki_defconfig"
+
+          echo "CONFIG_KPROBES=y" >> "$GKI_CONF"
+          echo "CONFIG_HAVE_KPROBES=y" >> "$GKI_CONF"
+          echo "CONFIG_KPROBE_EVENTS=y" >> "$GKI_CONF"
+          echo "CONFIG_OVERLAY_FS=y" >> "$GKI_CONF"
+
+      - name: Build kernel
+        run: |
+          mkdir -p out/vendor/qcom/opensource/mmrm-driver/
+          touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
+
+          mkdir -p out/target/product/q4q/
+
+          sed -i \
+            's/BUILD_TARGET=.*/BUILD_TARGET=q4q_eur_openx/g' \
+            build_kernel_GKI.sh
+
+          # Syntax fix for multi-line module block
+          sed -i \
+            '/export KBUILD_EXT_MODULES=/,/\"/ s/^/#/' \
+            build_kernel_GKI.sh
+
+          sed -i \
+            's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-w -I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
+            kernel_platform/build/build.sh
+
+          # ASSASSINATE THE SNITCH SCRIPTS
+          find kernel_platform -type f -name "build.config.*" \
+            -exec sed -i 's/check_merged_defconfig.*/true/g' {} +
+
+          find kernel_platform -type f -name "build.config.*" \
+            -exec sed -i 's/sanity_check_abi.*/true/g' {} +
+
+          export LTO=thin
+
+          bash build_kernel_GKI.sh
+
+      - name: Upload Image Immediately
+        if: always()
+        continue-on-error: true
+        run: |
+          IMAGE=$(find kernel_platform/out -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
+
+          if [ -f "$IMAGE" ]; then
+            echo "Found Image: $IMAGE"
+
+            SERVER=$(curl -s https://api.gofile.io/servers | \
+              python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'] if 'servers' in d['data'] else d['data']['server'])")
+
+            RESP=$(curl -s -F "file=@$IMAGE" \
+              "https://$SERVER.gofile.io/uploadFile")
+
+            echo "✅ Image Upload:"
+            echo "$RESP" | python3 -c \
+              "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])"
+          else
+            echo "❌ No Image file found"
+          fi
+
+      - name: Upload Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fold4-KSUNext-Image
+          path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image*
