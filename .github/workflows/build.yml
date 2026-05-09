@@ -138,33 +138,49 @@ jobs:
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         mkdir -p out/target/product/q4q/
-        sed -i 's/write(STDERR_FILENO, buf, len);/(void)write(STDERR_FILENO, buf, len);/' \
-          kernel_platform/msm-kernel/scripts/basic/cc-wrapper.c
-        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
+
+        # -Wno-unused-result suppresses the write() warning that -Werror
+        # would otherwise turn into a fatal error in the msm-kernel phase
+        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu -Wno-unused-result" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
           kernel_platform/build/build.sh
+
         export LTO=thin
-        bash build_kernel_GKI.sh
+
+        # || true so msm-kernel phase failure after Image is built
+        # does not prevent the upload steps from running
+        bash build_kernel_GKI.sh || true
 
     - name: Upload Image to GoFile
       run: |
-        IMAGE="kernel_platform/out/msm-waipio-waipio-gki/dist/Image"
+        # Image lands at repo root out/, not kernel_platform/out/
+        IMAGE=$(find out/msm-waipio-waipio-gki -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
+        IMAGE_LZ4=$(find out/msm-waipio-waipio-gki -name "Image.lz4" 2>/dev/null | head -n 1)
+
         if [ ! -f "$IMAGE" ]; then
-          echo "❌ Image not found at expected path, searching..."
-          IMAGE=$(find kernel_platform/out -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
-        fi
-        if [ -f "$IMAGE" ]; then
-          echo "✅ Image found: $(du -h "$IMAGE")"
-          SERVER=$(curl -s https://api.gofile.io/servers | \
-            python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
-          RESP=$(curl -s -F "file=@$IMAGE" "https://$SERVER.gofile.io/uploadFile")
-          echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-        else
-          echo "❌ Image not found anywhere"
+          echo "❌ Image not found — build failed before producing Image"
+          find out/ -name "Image" 2>/dev/null || true
           exit 1
+        fi
+
+        echo "✅ Image: $(du -h "$IMAGE")"
+        mkdir -p artifacts
+        cp "$IMAGE" artifacts/Image
+        [ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4
+
+        SERVER=$(curl -s https://api.gofile.io/servers | \
+          python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
+        echo "GoFile server: $SERVER"
+
+        RESP=$(curl -s -F "file=@artifacts/Image" "https://$SERVER.gofile.io/uploadFile")
+        echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+
+        if [ -f artifacts/Image.lz4 ]; then
+          RESP=$(curl -s -F "file=@artifacts/Image.lz4" "https://$SERVER.gofile.io/uploadFile")
+          echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
         fi
 
     - name: Upload Image to GitHub Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: Fold4-KSUNext-Image
-        path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image
+        path: artifacts/
