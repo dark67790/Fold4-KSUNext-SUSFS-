@@ -59,9 +59,9 @@ jobs:
               "$TOOLS_DIR/gcc-"* "$TOOLS_DIR/g++-"* \
               "$TOOLS_DIR/cc" "$TOOLS_DIR/c++"
 
-        # Sysroot — clang uses --sysroot= for host tool compilation (DTC etc.)
-        # Must be a real directory with headers, not just symlinks to parent
+        # Sysroot setup with requested cleanup
         SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
+        rm -rf "$SYSROOT"
         mkdir -p "$SYSROOT/usr/include" "$SYSROOT/usr/lib" "$SYSROOT/lib64"
         cp -a /usr/include/. "$SYSROOT/usr/include/"
         cp -a /usr/lib/x86_64-linux-gnu/. "$SYSROOT/usr/lib/"
@@ -96,7 +96,6 @@ jobs:
           "CONFIG_KNOX_KAP" "CONFIG_LTO" "CONFIG_LTO_CLANG"
           "CONFIG_LTO_CLANG_THIN" "CONFIG_LTO_CLANG_FULL" "CONFIG_DEBUG_INFO_BTF"
         )
-        # Only patch common/ defconfigs — that's the only kernel we're building
         find kernel_platform/common -type f -name "*defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           for flag in "${FLAGS[@]}"; do
@@ -119,8 +118,7 @@ jobs:
         export LTO=none
 
         cd kernel_platform
-        # Build common/ GKI kernel only — no msm-kernel second phase,
-        # no DTC, no external modules, just the Image
+        # Directly target the GKI config to produce a clean Image
         BUILD_CONFIG=common/build.config.gki.aarch64 ./build/build.sh
 
     - name: Verify Image
@@ -129,8 +127,7 @@ jobs:
         if [ -f "$IMAGE_PATH" ]; then
           echo "✅ Image found: $(du -h "$IMAGE_PATH")"
         else
-          echo "❌ Image not found, searching everywhere..."
-          find . -name "Image" -not -path "./.git/*" 2>/dev/null || true
+          echo "❌ Image not found"
           exit 1
         fi
 
