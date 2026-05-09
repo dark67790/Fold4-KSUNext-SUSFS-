@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (Native Google Toolchain)
+name: Build Fold4 Kernel (KSU-Next)
 
 on:
   push:
@@ -13,9 +13,10 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Free Disk Space & Create Swap
+    - name: Free Disk Space and Create Swap
       run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/lib/jvm /usr/share/swift
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
         sudo apt-get clean
         sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=12288 status=progress
         sudo chmod 600 /swapfile-extra
@@ -25,7 +26,8 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev python3-pip unzip git patch coreutils curl build-essential cpio wget
+        sudo apt install -y bc bison flex libssl-dev libelf-dev \
+          python3-pip unzip git patch coreutils curl build-essential cpio wget
 
     - name: Download and Extract Samsung Source
       run: |
@@ -36,24 +38,43 @@ jobs:
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
-    - name: Download OFFICIAL Google Prebuilts
+    - name: Download Clang and GAS
       run: |
         cd kernel_platform
-        
-        # 1. Clang
         mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
-        curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" | tar -xz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
-        
-        # 2. GAS Assembler
+        curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
+        tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
+        rm clang.tar.gz
         mkdir -p prebuilts/gas/linux-x86
-        curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" | tar -xz -C prebuilts/gas/linux-x86
-        
-        # 3. Kernel Build Tools (FIXED URL: Provides ufdt_apply_overlay, mktemp, etc)
-        git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools prebuilts/kernel-build-tools
-        
-        # 4. GCC Host & Sysroot (Provides stdio.h, crt1.o, and the native sysroot)
-        mkdir -p prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
-        git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8 prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8
+        curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
+        tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
+        rm gas.tar.gz
+
+    - name: Setup Host Tools
+      run: |
+        chmod -R u+w kernel_platform/build
+        TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
+        mkdir -p "$TOOLS_DIR"
+
+        # Populate hermetic tools dir with system BUILD UTILITIES only
+        # (make, nproc, sed, awk, find, etc.) — NOT gcc/g++.
+        # All compilation goes through Google's prebuilt clang via LLVM=1.
+        find /usr/bin /bin -maxdepth 1 \( -type f -o -type l \) -executable \
+          -exec ln -sf {} "$TOOLS_DIR/" \;
+
+        # Remove any system gcc/g++ that landed in the tools dir — we do not
+        # want the build system accidentally falling back to them.
+        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" \
+              "$TOOLS_DIR/gcc-"* "$TOOLS_DIR/g++-"* \
+              "$TOOLS_DIR/cc" "$TOOLS_DIR/c++"
+
+        # _setup_env.sh is sourced by build.sh and locks PATH to the hermetic
+        # prebuilt dirs. Appending here keeps /usr/bin and /bin alive for
+        # build script utilities (nproc, readlink, sed, tr, etc.).
+        if [ -f kernel_platform/build/_setup_env.sh ]; then
+          chmod u+w kernel_platform/build/_setup_env.sh
+          echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
+        fi
 
     - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
@@ -61,7 +82,7 @@ jobs:
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-    - name: Source Surgery RKP Fix
+    - name: RKP Source Fix
       run: |
         GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
         if [ -f "$GAF_FILE" ]; then
@@ -70,61 +91,63 @@ jobs:
           sed -i 's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' "$GAF_FILE"
         fi
 
-    - name: Patch Defconfigs (Clean Merge Method)
+    - name: Patch Defconfigs
       run: |
         FLAGS=(
-          "CONFIG_SECURITY_DEFEX"
-          "CONFIG_PROCA"
-          "CONFIG_FIVE"
-          "CONFIG_UH"
-          "CONFIG_RKP"
-          "CONFIG_KDP"
-          "CONFIG_KDP_CRED"
-          "CONFIG_KDP_NS"
-          "CONFIG_KDP_TEST"
-          "CONFIG_RKP_TEST"
-          "CONFIG_KNOX_KAP"
-          "CONFIG_DEBUG_INFO_BTF"
-          "CONFIG_SEC_DEBUG_AP_CONTEXT"
+          "CONFIG_SECURITY_DEFEX" "CONFIG_PROCA" "CONFIG_FIVE" "CONFIG_UH"
+          "CONFIG_RKP" "CONFIG_KDP" "CONFIG_KDP_CRED" "CONFIG_KDP_NS"
+          "CONFIG_KNOX_KAP" "CONFIG_LTO" "CONFIG_LTO_CLANG"
+          "CONFIG_LTO_CLANG_THIN" "CONFIG_LTO_CLANG_FULL" "CONFIG_DEBUG_INFO_BTF"
         )
-        
-        find kernel_platform -type f \( -name "*defconfig" -o -name "*.config" \) | while read -r config; do
+        find kernel_platform -type f -name "*defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           for flag in "${FLAGS[@]}"; do
-            sed -i "s/.*${flag}.*/# ${flag} is not set/g" "$config"
+            sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
           done
-          
-          # Clean existing KSU entries to prevent merge conflicts
-          sed -i '/CONFIG_KPROBES/d' "$config"
-          sed -i '/CONFIG_HAVE_KPROBES/d' "$config"
-          sed -i '/CONFIG_KPROBE_EVENTS/d' "$config"
-          sed -i '/CONFIG_OVERLAY_FS/d' "$config"
+          echo "CONFIG_LTO_NONE=y" >> "$config"
+          echo "CONFIG_KPROBES=y" >> "$config"
+          echo "CONFIG_HAVE_KPROBES=y" >> "$config"
+          echo "CONFIG_KPROBE_EVENTS=y" >> "$config"
+          echo "CONFIG_OVERLAY_FS=y" >> "$config"
         done
-        
-        # Add KSU flags to the base config
-        GKI_CONF="kernel_platform/common/arch/arm64/configs/gki_defconfig"
-        echo "CONFIG_KPROBES=y" >> "$GKI_CONF"
-        echo "CONFIG_HAVE_KPROBES=y" >> "$GKI_CONF"
-        echo "CONFIG_KPROBE_EVENTS=y" >> "$GKI_CONF"
-        echo "CONFIG_OVERLAY_FS=y" >> "$GKI_CONF"
 
-    - name: Build kernel
+    - name: Build Kernel
       run: |
-        mkdir -p out/vendor/qcom/opensource/mmrm-driver/
-        touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
-        mkdir -p out/target/product/q4q/
-        
-        # Spoof Global Variant
-        sed -i 's/BUILD_TARGET=.*/BUILD_TARGET=q4q_eur_openx/g' build_kernel_GKI.sh
-        
-        # Assassinate the config-checker script
-        find . -type f -name "*.sh" -exec sed -i 's/check_merged_defconfig/true/g' {} +
-        
-        export LTO=thin
-        bash build_kernel_GKI.sh
+        # Fix unused-result warning in Samsung cc-wrapper
+        sed -i 's/write(STDERR_FILENO, buf, len);/(void)write(STDERR_FILENO, buf, len);/' \
+          kernel_platform/msm-kernel/scripts/basic/cc-wrapper.c
 
-    - name: Upload Image
+        # LLVM=1 already makes clang the HOSTCC (build.sh line 695-705).
+        # We only need HOSTCFLAGS/HOSTLDFLAGS so the prebuilt clang can
+        # locate Ubuntu's system headers and libs for host tool compilation.
+        # No HOSTCC override — prebuilt clang handles everything.
+        sed -i \
+          's|TOOL_ARGS+=("LLVM=1")|TOOL_ARGS+=("LLVM=1" "HOSTCFLAGS=-I/usr/include -I/usr/include/x86_64-linux-gnu" "HOSTLDFLAGS=-L/usr/lib/x86_64-linux-gnu")|' \
+          kernel_platform/build/build.sh
+
+        # POST_DEFCONFIG_CMDS is eval'd inside build.sh after all configs are
+        # sourced — the only safe override point for MAKE_GOALS.
+        export POST_DEFCONFIG_CMDS="MAKE_GOALS='Image'"
+        export SKIP_EXT_MODULES=1
+        export SKIP_MRPROPER=1
+        export LTO=none
+
+        cd kernel_platform
+        BUILD_CONFIG=msm-kernel/build.config.msm.waipio.sec ./build/build.sh
+
+    - name: Verify Image
+      run: |
+        IMAGE_PATH=$(find kernel_platform/out -name "Image" 2>/dev/null | head -n 1)
+        if [ -f "$IMAGE_PATH" ]; then
+          echo "✅ Image found: $(du -h "$IMAGE_PATH")"
+        else
+          echo "❌ Image not found, searching everywhere..."
+          find . -name "Image" -not -path "./.git/*" 2>/dev/null || true
+          exit 1
+        fi
+
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: Fold4-KSUNext-Image
-        path: kernel_platform/out/msm-waipio-waipio-gki/dist/Image*
+        path: kernel_platform/out/**/dist/Image
