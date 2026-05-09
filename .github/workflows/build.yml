@@ -8,21 +8,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Free Disk Space and Create 12GB Swap
+    - name: Free Disk Space and Swap
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
         sudo apt-get clean
-        
-        # 12GB Swap using dd to prevent "Text file busy"
-        sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=12288 status=progress
+        sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=8192 status=progress
         sudo chmod 600 /swapfile-extra
         sudo mkswap /swapfile-extra
         sudo swapon /swapfile-extra
@@ -32,7 +28,7 @@ jobs:
       run: |
         sudo apt update
         sudo apt install -y bc bison flex libssl-dev libelf-dev \
-          python3-pip unzip git patch coreutils curl build-essential cpio wget jq
+          python3-pip unzip git patch coreutils curl build-essential cpio wget
 
     - name: Download and Extract Samsung Source
       run: |
@@ -58,10 +54,14 @@ jobs:
     - name: Setup Host Tools and Sysroot
       run: |
         chmod -R u+w kernel_platform/build
+
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
-        find /usr/bin /bin -maxdepth 1 \( -type f -o -type l \) -executable -exec ln -sf {} "$TOOLS_DIR/" \;
-        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" "$TOOLS_DIR/gcc-"* "$TOOLS_DIR/g++-"* "$TOOLS_DIR/cc" "$TOOLS_DIR/c++"
+        find /usr/bin /bin -maxdepth 1 \( -type f -o -type l \) -executable \
+          -exec ln -sf {} "$TOOLS_DIR/" \;
+        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" \
+              "$TOOLS_DIR/gcc-"* "$TOOLS_DIR/g++-"* \
+              "$TOOLS_DIR/cc" "$TOOLS_DIR/c++"
 
         SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
         rm -rf "$SYSROOT"
@@ -95,16 +95,13 @@ jobs:
         FLAGS=(
           "CONFIG_SECURITY_DEFEX" "CONFIG_PROCA" "CONFIG_FIVE" "CONFIG_UH"
           "CONFIG_RKP" "CONFIG_KDP" "CONFIG_KDP_CRED" "CONFIG_KDP_NS"
-          "CONFIG_KNOX_KAP" "CONFIG_LTO" "CONFIG_LTO_CLANG"
-          "CONFIG_LTO_CLANG_THIN" "CONFIG_LTO_CLANG_FULL" "CONFIG_DEBUG_INFO_BTF"
+          "CONFIG_KNOX_KAP" "CONFIG_LTO_CLANG_FULL" "CONFIG_DEBUG_INFO_BTF"
         )
         find kernel_platform/common -type f -name "*defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           for flag in "${FLAGS[@]}"; do
             sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
           done
-          # Force Thin LTO and KSU support
-          echo "CONFIG_LTO_CLANG=y" >> "$config"
           echo "CONFIG_LTO_CLANG_THIN=y" >> "$config"
           echo "CONFIG_KPROBES=y" >> "$config"
           echo "CONFIG_HAVE_KPROBES=y" >> "$config"
@@ -114,7 +111,6 @@ jobs:
 
     - name: Build Kernel
       run: |
-        # Inject Host Flags into common build
         sed -i \
           's|TOOL_ARGS+=("LLVM=1")|TOOL_ARGS+=("LLVM=1" "HOSTCFLAGS=-I/usr/include -I/usr/include/x86_64-linux-gnu" "HOSTLDFLAGS=-L/usr/lib/x86_64-linux-gnu")|' \
           kernel_platform/build/build.sh
@@ -126,34 +122,55 @@ jobs:
         cd kernel_platform
         BUILD_CONFIG=common/build.config.gki.aarch64 ./build/build.sh
 
-    - name: Prepare Artifacts
+    - name: Verify Images
       run: |
-        mkdir -p final_out
-        find kernel_platform/out/android12-5.10/ -name "Image*" -exec cp {} final_out/ \;
-        ls -lh final_out/
+        IMAGE=$(find kernel_platform/out -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
+        IMAGE_LZ4=$(find kernel_platform/out -name "Image.lz4" 2>/dev/null | head -n 1)
+        if [ -f "$IMAGE" ]; then
+          echo "✅ Image: $(du -h "$IMAGE")"
+        else
+          echo "❌ Image not found"
+          find kernel_platform/out -type f | grep -i image || true
+          exit 1
+        fi
+        if [ -f "$IMAGE_LZ4" ]; then
+          echo "✅ Image.lz4: $(du -h "$IMAGE_LZ4")"
+        fi
+        # Stage both for upload steps
+        mkdir -p artifacts
+        cp "$IMAGE" artifacts/Image
+        [ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4
 
-    - name: Upload to GoFile
-      run: |
-        SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
-        for file in final_out/*; do
-          RESPONSE=$(curl -F "file=@$file" "https://$SERVER.gofile.io/contents/uploadfile")
-          DOWNLOAD_LINK=$(echo $RESPONSE | jq -r '.data.downloadPage')
-          echo "✅ File: $(basename $file) - Link: $DOWNLOAD_LINK"
-        done
+    - name: Upload to GitHub Actions Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: Fold4-KSUNext-Kernel
+        path: artifacts/
 
     - name: Upload to GitHub Release
-      uses: softprops/action-gh-release@v2
-      if: success()
+      uses: softprops/action-gh-release@v1
       with:
-        tag_name: build-${{ github.run_id }}
-        name: Fold4 Thin-LTO Build ${{ github.run_id }}
-        files: final_out/*
-        body: "Fold4 Common Kernel with KernelSU-Next and Thin LTO enabled."
+        tag_name: kernel-${{ github.run_number }}
+        name: "Fold4 KSU-Next Kernel #${{ github.run_number }}"
+        body: |
+          Kernel build from commit ${{ github.sha }}
+          - KernelSU-Next integrated
+          - LTO Thin enabled
+          - Knox/RKP disabled
+        files: |
+          artifacts/Image
+          artifacts/Image.lz4
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: Fold4-Kernel-ThinLTO
-        path: final_out/*
+    - name: Upload to GoFile
+      run: |
+        SERVER=$(curl -s https://api.gofile.io/servers | \
+          python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
+        echo "Uploading to GoFile server: $SERVER"
+
+        RESP=$(curl -s -F "file=@artifacts/Image" "https://$SERVER.gofile.io/uploadFile")
+        echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+
+        RESP=$(curl -s -F "file=@artifacts/Image.lz4" "https://$SERVER.gofile.io/uploadFile")
+        echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
