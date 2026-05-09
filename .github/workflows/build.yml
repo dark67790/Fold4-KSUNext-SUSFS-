@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -28,11 +31,18 @@ jobs:
     - name: Download and Extract Samsung Source
       run: |
         pip install gdown
-        gdown 1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M -O samsung.zip
+        gdown 1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2 -O samsung.zip
         unzip samsung.zip
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
+
+    - name: Patch Build Target
+      run: |
+        sed -i 's/BUILD_TARGET=q4q_kor_singlex/BUILD_TARGET=q4q_eur_openx/g' \
+          build_kernel_GKI.sh
+        echo "Build target:"
+        grep "BUILD_TARGET" build_kernel_GKI.sh
 
     - name: Download Clang and GAS
       run: |
@@ -107,62 +117,54 @@ jobs:
 
     - name: Build Kernel
       run: |
+        sed -i 's/write(STDERR_FILENO, buf, len);/(void)write(STDERR_FILENO, buf, len);/' \
+          kernel_platform/msm-kernel/scripts/basic/cc-wrapper.c
+
         sed -i \
           's|TOOL_ARGS+=("LLVM=1")|TOOL_ARGS+=("LLVM=1" "HOSTCFLAGS=-I/usr/include -I/usr/include/x86_64-linux-gnu" "HOSTLDFLAGS=-L/usr/lib/x86_64-linux-gnu")|' \
           kernel_platform/build/build.sh
 
+        export POST_DEFCONFIG_CMDS="MAKE_GOALS='Image'"
         export KMI_SYMBOL_LIST_STRICT_MODE=0
+        export SKIP_EXT_MODULES=1
         export SKIP_MRPROPER=1
         export LTO=none
 
         cd kernel_platform
-        BUILD_CONFIG=common/build.config.gki.aarch64 ./build/build.sh
+        # || true so phase 2 failures don't kill the job after Image is built
+        BUILD_CONFIG=msm-kernel/build.config.msm.waipio.sec ./build/build.sh || true
 
-    - name: Verify and Stage Images
+    - name: Upload Image to GoFile immediately
       run: |
         IMAGE=$(find kernel_platform/out -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
         IMAGE_LZ4=$(find kernel_platform/out -name "Image.lz4" 2>/dev/null | head -n 1)
+
         if [ ! -f "$IMAGE" ]; then
-          echo "❌ Image not found"
-          find kernel_platform/out -type f | grep -i image || true
+          echo "❌ Image not found — build failed before producing Image"
           exit 1
         fi
-        echo "✅ Image: $(du -h "$IMAGE")"
+
+        echo "✅ Image found: $(du -h "$IMAGE")"
+
+        SERVER=$(curl -s https://api.gofile.io/servers | \
+          python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
+        echo "GoFile server: $SERVER"
+
+        RESP=$(curl -s -F "file=@$IMAGE" "https://$SERVER.gofile.io/uploadFile")
+        echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+
+        if [ -f "$IMAGE_LZ4" ]; then
+          RESP=$(curl -s -F "file=@$IMAGE_LZ4" "https://$SERVER.gofile.io/uploadFile")
+          echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+        fi
+
+        # Stage for artifact upload
         mkdir -p artifacts
         cp "$IMAGE" artifacts/Image
-        [ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4 && \
-          echo "✅ Image.lz4: $(du -h "$IMAGE_LZ4")"
+        [ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4
 
     - name: Upload to GitHub Actions Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: Fold4-KSUNext-Kernel
         path: artifacts/
-
-    - name: Upload to GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: kernel-${{ github.run_number }}
-        name: "Fold4 KSU-Next Kernel #${{ github.run_number }}"
-        body: |
-          Kernel build from commit ${{ github.sha }}
-          - KernelSU-Next integrated
-          - LTO disabled
-          - Knox/RKP disabled
-        files: |
-          artifacts/Image
-          artifacts/Image.lz4
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload to GoFile
-      run: |
-        SERVER=$(curl -s https://api.gofile.io/servers | \
-          python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
-        echo "GoFile server: $SERVER"
-        RESP=$(curl -s -F "file=@artifacts/Image" "https://$SERVER.gofile.io/uploadFile")
-        echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-        if [ -f artifacts/Image.lz4 ]; then
-          RESP=$(curl -s -F "file=@artifacts/Image.lz4" "https://$SERVER.gofile.io/uploadFile")
-          echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-        fi
