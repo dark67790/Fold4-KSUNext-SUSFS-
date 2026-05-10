@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (Samsung Safe + KSU + LTO Thin)
+name: Build Fold4 Kernel (Minimal Safe + KSU + LTO Thin)
 
 on:
   push:
@@ -27,8 +27,10 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev \
-          python3-pip unzip git patch coreutils curl build-essential cpio wget
+        sudo apt install -y \
+          bc bison flex libssl-dev libelf-dev \
+          python3-pip unzip git patch coreutils \
+          curl build-essential cpio wget
 
     - name: Download and Extract Samsung Source
       run: |
@@ -41,8 +43,10 @@ jobs:
 
     - name: Patch Build Target
       run: |
-        sed -i 's/BUILD_TARGET=q4q_kor_singlex/BUILD_TARGET=q4q_eur_openx/g' \
+        sed -i \
+          's/BUILD_TARGET=q4q_kor_singlex/BUILD_TARGET=q4q_eur_openx/g' \
           build_kernel_GKI.sh
+
         grep "BUILD_TARGET" build_kernel_GKI.sh
 
     - name: Download Clang and GAS
@@ -50,6 +54,7 @@ jobs:
         cd kernel_platform
 
         mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
+
         curl -LSs \
           "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" \
           -o clang.tar.gz
@@ -65,7 +70,9 @@ jobs:
           "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" \
           -o gas.tar.gz
 
-        tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
+        tar -xzf gas.tar.gz \
+          -C prebuilts/gas/linux-x86
+
         rm gas.tar.gz
 
     - name: Setup Host Tools and Sysroot
@@ -73,9 +80,13 @@ jobs:
         chmod -R u+w kernel_platform/build
 
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
+
         mkdir -p "$TOOLS_DIR"
 
-        find /usr/bin /bin -maxdepth 1 -type f -executable \
+        find /usr/bin /bin \
+          -maxdepth 1 \
+          -type f \
+          -executable \
           -exec ln -sf {} "$TOOLS_DIR/" \;
 
         rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
@@ -87,6 +98,7 @@ jobs:
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
 
         KBT=$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64
+
         mkdir -p "$KBT"
 
         cp /usr/lib/x86_64-linux-gnu/crt1.o "$KBT/"
@@ -103,6 +115,7 @@ jobs:
         SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
 
         rm -rf "$SYSROOT"
+
         mkdir -p "$SYSROOT/usr"
 
         ln -sf /usr/include "$SYSROOT/usr/include"
@@ -111,8 +124,7 @@ jobs:
         ln -sf /lib64 "$SYSROOT/lib64"
 
         if [ -f kernel_platform/build/_setup_env.sh ]; then
-          echo 'export PATH=$PATH:/usr/bin:/bin' >> \
-            kernel_platform/build/_setup_env.sh
+          echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
         fi
 
     - name: Setup KernelSU-Next
@@ -124,62 +136,86 @@ jobs:
           "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
           | bash -
 
-    - name: RKP Source Fix
-      run: |
-        GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
-
-        if [ -f "$GAF_FILE" ]; then
-          chmod u+w "$GAF_FILE"
-
-          sed -i \
-            's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' \
-            "$GAF_FILE"
-
-          sed -i \
-            's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' \
-            "$GAF_FILE"
-
-          echo "Applied RKP source fix"
-        fi
-
     - name: Minimal Safe Config Patch
       run: |
-        GKI_DEFCONFIG="kernel_platform/common/arch/arm64/configs/gki_defconfig"
+        cat << 'EOF' > patch_configs.py
+        import os
 
-        chmod u+w "$GKI_DEFCONFIG"
+        target_flags = {
+            # Keep Samsung core integrity alive
+            "CONFIG_RKP": "y",
+            "CONFIG_UH": "y",
+            "CONFIG_KDP": "y",
 
-        cat <<EOF >> "$GKI_DEFCONFIG"
+            # Optional Samsung fastuh off
+            "CONFIG_FASTUH": "n",
+            "CONFIG_FASTUH_RKP": "n",
+            "CONFIG_FASTUH_KDP": "n",
 
-        # Samsung Core Integrity
-        CONFIG_RKP=y
-        CONFIG_UH=y
-        CONFIG_KDP=y
+            # Disable root blockers
+            "CONFIG_SECURITY_DEFEX": "n",
+            "CONFIG_PROCA": "n",
+            "CONFIG_FIVE": "n",
+            "CONFIG_KNOX_KAP": "n",
 
-        # Optional FastUH disables
-        # CONFIG_FASTUH is not set
-        # CONFIG_FASTUH_RKP is not set
-        # CONFIG_FASTUH_KDP is not set
+            # KernelSU requirements
+            "CONFIG_KPROBES": "y",
+            "CONFIG_HAVE_KPROBES": "y",
+            "CONFIG_KPROBE_EVENTS": "y",
+            "CONFIG_OVERLAY_FS": "y",
 
-        # Disable Samsung root blockers
-        # CONFIG_SECURITY_DEFEX is not set
-        # CONFIG_PROCA is not set
-        # CONFIG_FIVE is not set
-        # CONFIG_KNOX_KAP is not set
+            # LTO
+            "CONFIG_LTO_CLANG_THIN": "y",
+            "CONFIG_LTO_CLANG_FULL": "n",
+            "CONFIG_LTO_NONE": "n"
+        }
 
-        # KernelSU
-        CONFIG_KPROBES=y
-        CONFIG_HAVE_KPROBES=y
-        CONFIG_KPROBE_EVENTS=y
-        CONFIG_OVERLAY_FS=y
+        for root, dirs, files in os.walk("kernel_platform"):
+            for file in files:
+                if file.endswith("defconfig") or file.endswith(".config"):
+                    path = os.path.join(root, file)
 
-        # LTO
-        CONFIG_LTO_CLANG_THIN=y
-        # CONFIG_LTO_CLANG_FULL is not set
-        # CONFIG_LTO_NONE is not set
+                    try:
+                        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                            lines = f.readlines()
 
+                        new_lines = []
+                        found = set()
+
+                        for line in lines:
+                            replaced = False
+
+                            for flag, val in target_flags.items():
+                                if line.startswith(f"{flag}=") or line.startswith(f"# {flag} is not set"):
+                                    if val == "y":
+                                        new_lines.append(f"{flag}=y\n")
+                                    else:
+                                        new_lines.append(f"# {flag} is not set\n")
+
+                                    found.add(flag)
+                                    replaced = True
+                                    break
+
+                            if not replaced:
+                                new_lines.append(line)
+
+                        for flag, val in target_flags.items():
+                            if flag not in found:
+                                if val == "y":
+                                    new_lines.append(f"{flag}=y\n")
+                                else:
+                                    new_lines.append(f"# {flag} is not set\n")
+
+                        with open(path, "w", encoding="utf-8") as f:
+                            f.writelines(new_lines)
+
+                        print(f"Patched: {path}")
+
+                    except Exception as e:
+                        print(f"Failed: {path} -> {e}")
         EOF
 
-        echo "Patched gki_defconfig"
+        python3 patch_configs.py
 
     - name: Build kernel
       run: |
@@ -195,16 +231,6 @@ jobs:
         export LTO=thin
 
         bash build_kernel_GKI.sh || true
-
-    - name: Verify Final Config
-      run: |
-        CONFIG=$(find out -name ".config" | head -n 1)
-
-        echo "Final config: $CONFIG"
-
-        grep -E \
-          "CONFIG_(RKP|UH|KDP|FASTUH|DEFEX|PROCA|FIVE|KNOX_KAP|KPROBES|OVERLAY_FS|LTO)" \
-          "$CONFIG" || true
 
     - name: Upload Image to GoFile
       run: |
@@ -223,14 +249,13 @@ jobs:
           exit 1
         fi
 
-        echo "✅ Image: $(du -h "$IMAGE")"
-
         mkdir -p artifacts
 
         cp "$IMAGE" artifacts/Image
 
-        [ -f "$IMAGE_LZ4" ] && \
+        if [ -f "$IMAGE_LZ4" ]; then
           cp "$IMAGE_LZ4" artifacts/Image.lz4
+        fi
 
         SERVER=$(curl -s https://api.gofile.io/servers | \
           python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
@@ -239,17 +264,8 @@ jobs:
           -F "file=@artifacts/Image" \
           "https://$SERVER.gofile.io/uploadFile")
 
-        echo "✅ Image → $(echo $RESP | \
-          python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-
-        if [ -f artifacts/Image.lz4 ]; then
-          RESP=$(curl -s \
-            -F "file=@artifacts/Image.lz4" \
-            "https://$SERVER.gofile.io/uploadFile")
-
-          echo "✅ Image.lz4 → $(echo $RESP | \
-            python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-        fi
+        echo "Image uploaded:"
+        echo "$RESP"
 
     - name: Upload to GitHub Artifacts
       uses: actions/upload-artifact@v4
