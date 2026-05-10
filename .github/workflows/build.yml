@@ -67,10 +67,7 @@ jobs:
         printf '#!/bin/bash\nexec /usr/bin/gcc -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nexec /usr/bin/g++ -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
         
-        # Ghost Tool Bypass for dtb compilation (Fixes Error 127)
-        printf '#!/bin/bash\nif [ "$#" -ge 2 ]; then cp "$1" "${@: -1}"; fi\nexit 0\n' > "$TOOLS_DIR/ufdt_apply_overlay"
-        
-        chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++" "$TOOLS_DIR/ufdt_apply_overlay"
+        chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
         
         KBT=$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64
         mkdir -p "$KBT"
@@ -235,3 +232,4 @@ jobs:
       with:
         name: Fold4-KSUNext-Image
         path: artifacts/
+
