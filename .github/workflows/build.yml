@@ -45,12 +45,6 @@ jobs:
           build_kernel_GKI.sh
         grep "BUILD_TARGET" build_kernel_GKI.sh
 
-    - name: Setup KernelSU-Next
-      working-directory: kernel_platform/common
-      run: |
-        chmod -R u+w .
-        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
-
     - name: Download Clang and GAS
       run: |
         cd kernel_platform
@@ -93,6 +87,62 @@ jobs:
           echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
         fi
 
+    - name: Setup KernelSU-Next
+      working-directory: kernel_platform/common
+      run: |
+        chmod -R u+w .
+        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+
+    - name: RKP Source Fix
+      run: |
+        GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
+        if [ -f "$GAF_FILE" ]; then
+          chmod u+w "$GAF_FILE"
+          sed -i 's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' "$GAF_FILE"
+          sed -i 's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' "$GAF_FILE"
+          echo "Applied RKP source fix"
+        fi
+
+    - name: Patch Defconfigs
+      run: |
+        DISABLE=(
+          # Hypervisor / RKP — Android 14: all under Hypervisor section
+          "CONFIG_UH"
+          "CONFIG_UH_RKP"
+          "CONFIG_UH_LKMAUTH"
+          "CONFIG_UH_LKM_BLOCK"
+          "CONFIG_RKP"
+          "CONFIG_RKP_CFP"
+          "CONFIG_RKP_CFP_JOPP"
+          "CONFIG_RKP_CFP_ROPP"
+          "CONFIG_KDP"
+          "CONFIG_KDP_CRED"
+          "CONFIG_KDP_NS"
+          "CONFIG_KDP_TEST"
+          "CONFIG_RKP_TEST"
+          # Security options
+          "CONFIG_SECURITY_DEFEX"
+          "CONFIG_PROCA"
+          "CONFIG_FIVE"
+          # CFI — this is what actually kills KSU hooks
+          "CONFIG_CFI_CLANG"
+          "CONFIG_CFI_CLANG_SHADOW"
+          "CONFIG_CFI_PERMISSIVE"
+          # Full LTO requires CFI on Samsung — disable it
+          "CONFIG_LTO_CLANG_FULL"
+          "CONFIG_LTO_CLANG_THIN"
+          # Misc
+          "CONFIG_KNOX_KAP"
+          "CONFIG_DEBUG_INFO_BTF"
+        )
+        find kernel_platform -type f -name "*defconfig" | while read -r config; do
+          chmod u+w "$config" 2>/dev/null || true
+          for flag in "${DISABLE[@]}"; do
+            sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
+          done
+          echo "CONFIG_LTO_NONE=y" >> "$config"
+        done
+
     - name: Build kernel
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
@@ -102,7 +152,7 @@ jobs:
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu -Wno-unused-result" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
           kernel_platform/build/build.sh
 
-        export LTO=thin
+        export LTO=none
         bash build_kernel_GKI.sh || true
 
     - name: Upload Image to GoFile
