@@ -105,42 +105,41 @@ jobs:
 
     - name: Patch Defconfigs
       run: |
-        DISABLE=(
-          # Hypervisor / RKP — Android 14: all under Hypervisor section
-          "CONFIG_UH"
-          "CONFIG_UH_RKP"
-          "CONFIG_UH_LKMAUTH"
-          "CONFIG_UH_LKM_BLOCK"
-          "CONFIG_RKP"
-          "CONFIG_RKP_CFP"
-          "CONFIG_RKP_CFP_JOPP"
-          "CONFIG_RKP_CFP_ROPP"
-          "CONFIG_KDP"
-          "CONFIG_KDP_CRED"
-          "CONFIG_KDP_NS"
-          "CONFIG_KDP_TEST"
-          "CONFIG_RKP_TEST"
-          # Security options
-          "CONFIG_SECURITY_DEFEX"
-          "CONFIG_PROCA"
-          "CONFIG_FIVE"
-          # CFI — this is what actually kills KSU hooks
-          "CONFIG_CFI_CLANG"
-          "CONFIG_CFI_CLANG_SHADOW"
-          "CONFIG_CFI_PERMISSIVE"
-          # Full LTO requires CFI on Samsung — disable it
-          "CONFIG_LTO_CLANG_FULL"
-          "CONFIG_LTO_CLANG_THIN"
-          # Misc
-          "CONFIG_KNOX_KAP"
-          "CONFIG_DEBUG_INFO_BTF"
-        )
-        find kernel_platform -type f -name "*defconfig" | while read -r config; do
+        STOCK_CONFIG="configs/stock_config.txt"
+
+        find kernel_platform -type f -name "gki_defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
-          for flag in "${DISABLE[@]}"; do
-            sed -i "s/${flag}=y/# ${flag} is not set/g" "$config"
-          done
-          echo "CONFIG_LTO_NONE=y" >> "$config"
+          cp "$STOCK_CONFIG" "$config"
+          echo "Replaced $config with stock config"
+
+          cat >> "$config" << 'EOF'
+# Disable Samsung Hypervisor (Android 14)
+CONFIG_UH=n
+CONFIG_RKP=n
+CONFIG_KDP=n
+CONFIG_KDP_CRED=n
+CONFIG_KDP_NS=n
+# Disable CFI — blocks KSU hooks
+CONFIG_CFI_CLANG=n
+CONFIG_CFI_CLANG_SHADOW=n
+# Switch from Full LTO to None
+CONFIG_LTO_CLANG_FULL=n
+CONFIG_LTO_NONE=y
+# Disable Samsung Security
+CONFIG_SECURITY_DEFEX=n
+CONFIG_PROCA=n
+CONFIG_PROCA_GKI_10=n
+CONFIG_PROCA_S_OS=n
+CONFIG_PROCA_CERTIFICATES_XATTR=n
+CONFIG_PROCA_DEBUG=n
+CONFIG_FIVE=n
+CONFIG_FIVE_GKI_10=n
+CONFIG_FIVE_TRUSTED_KEYRING=n
+# Disable GAF (tied to PROCA)
+CONFIG_GAF=n
+CONFIG_GAF_V6=n
+EOF
+          echo "Appended KSU config overrides"
         done
 
     - name: Build kernel
