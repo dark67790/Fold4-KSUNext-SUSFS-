@@ -105,6 +105,12 @@ jobs:
           'CONFIG_LTO_CLANG_THIN=y' \
           'CONFIG_LTO_CLANG_FULL=n' \
           'CONFIG_LTO_NONE=n' \
+          'CONFIG_KALLSYMS=y' \
+          'CONFIG_KALLSYMS_ALL=y' \
+          'CONFIG_KPROBES=y' \
+          'CONFIG_HAVE_KPROBES=y' \
+          'CONFIG_KPROBE_EVENTS=y' \
+          'CONFIG_OVERLAY_FS=y' \
           > /tmp/ksu_overrides.txt
 
         find kernel_platform -type f -name "gki_defconfig" | while read -r config; do
