@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (Minimal Safe + KSU + LTO Thin)
+name: Build Fold4 Kernel (Config Test - No KSU)
 
 on:
   push:
@@ -27,10 +27,8 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y \
-          bc bison flex libssl-dev libelf-dev \
-          python3-pip unzip git patch coreutils \
-          curl build-essential cpio wget
+        sudo apt install -y bc bison flex libssl-dev libelf-dev \
+          python3-pip unzip git patch coreutils curl build-essential cpio wget
 
     - name: Download and Extract Samsung Source
       run: |
@@ -43,205 +41,105 @@ jobs:
 
     - name: Patch Build Target
       run: |
-        sed -i \
-          's/BUILD_TARGET=q4q_kor_singlex/BUILD_TARGET=q4q_eur_openx/g' \
+        sed -i 's/BUILD_TARGET=q4q_kor_singlex/BUILD_TARGET=q4q_eur_openx/g' \
           build_kernel_GKI.sh
-
         grep "BUILD_TARGET" build_kernel_GKI.sh
 
     - name: Download Clang and GAS
       run: |
         cd kernel_platform
-
         mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
-
-        curl -LSs \
-          "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" \
-          -o clang.tar.gz
-
-        tar -xzf clang.tar.gz \
-          -C prebuilts-master/clang/host/linux-x86/clang-r416183b
-
+        curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
+        tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
         rm clang.tar.gz
-
         mkdir -p prebuilts/gas/linux-x86
-
-        curl -LSs \
-          "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" \
-          -o gas.tar.gz
-
-        tar -xzf gas.tar.gz \
-          -C prebuilts/gas/linux-x86
-
+        curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
+        tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
         rm gas.tar.gz
 
     - name: Setup Host Tools and Sysroot
       run: |
         chmod -R u+w kernel_platform/build
-
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
-
         mkdir -p "$TOOLS_DIR"
-
-        find /usr/bin /bin \
-          -maxdepth 1 \
-          -type f \
-          -executable \
-          -exec ln -sf {} "$TOOLS_DIR/" \;
-
+        find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
         rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-
-        printf '#!/bin/bash\nexec /usr/bin/gcc -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
-
-        printf '#!/bin/bash\nexec /usr/bin/g++ -w -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
-
+        printf '#!/bin/bash\nexec /usr/bin/gcc -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
+        printf '#!/bin/bash\nexec /usr/bin/g++ -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-
         KBT=$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64
-
         mkdir -p "$KBT"
-
         cp /usr/lib/x86_64-linux-gnu/crt1.o "$KBT/"
         cp /usr/lib/x86_64-linux-gnu/crti.o "$KBT/"
         cp /usr/lib/x86_64-linux-gnu/crtn.o "$KBT/"
         cp /usr/lib/x86_64-linux-gnu/Scrt1.o "$KBT/" 2>/dev/null || true
-
         ln -sf /usr/lib/x86_64-linux-gnu/libc.so.6 "$KBT/libc.so.6"
-
         echo "GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a )" > "$KBT/libc.so"
-
         ln -sf /usr/lib/x86_64-linux-gnu "$KBT/../lib64"
-
         SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
-
         rm -rf "$SYSROOT"
-
         mkdir -p "$SYSROOT/usr"
-
         ln -sf /usr/include "$SYSROOT/usr/include"
         ln -sf /usr/lib "$SYSROOT/usr/lib"
         ln -sf /lib "$SYSROOT/lib"
         ln -sf /lib64 "$SYSROOT/lib64"
-
         if [ -f kernel_platform/build/_setup_env.sh ]; then
           echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
         fi
 
-    - name: Setup KernelSU-Next
-      working-directory: kernel_platform/common
+    - name: Patch Defconfigs
       run: |
-        chmod -R u+w .
+        STOCK_CONFIG="configs/stock_config.txt"
 
-        curl -LSs \
-          "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
-          | bash -
+        printf '%s\n' \
+          'CONFIG_UH=n' \
+          'CONFIG_UH_RKP=n' \
+          'CONFIG_UH_LKMAUTH=n' \
+          'CONFIG_UH_LKM_BLOCK=n' \
+          'CONFIG_RKP_CFP_JOPP=n' \
+          'CONFIG_RKP_CFP_ROPP=n' \
+          'CONFIG_RKP_CFP=n' \
+          'CONFIG_SECURITY_DEFEX=n' \
+          'CONFIG_PROCA=n' \
+          'CONFIG_FIVE=n' \
+          'CONFIG_LTO_CLANG_THIN=y' \
+          'CONFIG_LTO_CLANG_FULL=n' \
+          'CONFIG_LTO_NONE=n' \
+          > /tmp/ksu_overrides.txt
 
-    - name: Minimal Safe Config Patch
-      run: |
-        cat << 'EOF' > patch_configs.py
-        import os
+        find kernel_platform -type f -name "gki_defconfig" | while read -r config; do
+          chmod u+w "$config" 2>/dev/null || true
+          cp "$STOCK_CONFIG" "$config"
+          cat /tmp/ksu_overrides.txt >> "$config"
+          echo "Patched $config with stock base"
+        done
 
-        target_flags = {
-            # Keep Samsung core integrity alive
-            "CONFIG_RKP": "y",
-            "CONFIG_UH": "y",
-            "CONFIG_KDP": "y",
-
-            # Optional Samsung fastuh off
-            "CONFIG_FASTUH": "n",
-            "CONFIG_FASTUH_RKP": "n",
-            "CONFIG_FASTUH_KDP": "n",
-
-            # Disable root blockers
-            "CONFIG_SECURITY_DEFEX": "n",
-            "CONFIG_PROCA": "n",
-            "CONFIG_FIVE": "n",
-            "CONFIG_KNOX_KAP": "n",
-
-            # KernelSU requirements
-            "CONFIG_KPROBES": "y",
-            "CONFIG_HAVE_KPROBES": "y",
-            "CONFIG_KPROBE_EVENTS": "y",
-            "CONFIG_OVERLAY_FS": "y",
-
-            # LTO
-            "CONFIG_LTO_CLANG_THIN": "y",
-            "CONFIG_LTO_CLANG_FULL": "n",
-            "CONFIG_LTO_NONE": "n"
-        }
-
-        for root, dirs, files in os.walk("kernel_platform"):
-            for file in files:
-                if file.endswith("defconfig") or file.endswith(".config"):
-                    path = os.path.join(root, file)
-
-                    try:
-                        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                            lines = f.readlines()
-
-                        new_lines = []
-                        found = set()
-
-                        for line in lines:
-                            replaced = False
-
-                            for flag, val in target_flags.items():
-                                if line.startswith(f"{flag}=") or line.startswith(f"# {flag} is not set"):
-                                    if val == "y":
-                                        new_lines.append(f"{flag}=y\n")
-                                    else:
-                                        new_lines.append(f"# {flag} is not set\n")
-
-                                    found.add(flag)
-                                    replaced = True
-                                    break
-
-                            if not replaced:
-                                new_lines.append(line)
-
-                        for flag, val in target_flags.items():
-                            if flag not in found:
-                                if val == "y":
-                                    new_lines.append(f"{flag}=y\n")
-                                else:
-                                    new_lines.append(f"# {flag} is not set\n")
-
-                        with open(path, "w", encoding="utf-8") as f:
-                            f.writelines(new_lines)
-
-                        print(f"Patched: {path}")
-
-                    except Exception as e:
-                        print(f"Failed: {path} -> {e}")
-        EOF
-
-        python3 patch_configs.py
+        find kernel_platform -type f \( \
+          -name "*.config" \
+          -o -name "*defconfig*" \
+          -o -name "lego.config" \
+        \) | while read -r config; do
+          chmod u+w "$config" 2>/dev/null || true
+          cat /tmp/ksu_overrides.txt >> "$config"
+          echo "Appended overrides to $config"
+        done
 
     - name: Build kernel
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
-
         mkdir -p out/target/product/q4q/
 
-        sed -i \
-          's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu -Wno-unused-result" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
+        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu -Wno-unused-result" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
           kernel_platform/build/build.sh
 
         export LTO=thin
-
         bash build_kernel_GKI.sh || true
 
     - name: Upload Image to GoFile
       run: |
-        IMAGE=$(find out/msm-waipio-waipio-gki \
-          -name "Image" \
-          -not -name "*.lz4" \
-          2>/dev/null | head -n 1)
-
-        IMAGE_LZ4=$(find out/msm-waipio-waipio-gki \
-          -name "Image.lz4" \
-          2>/dev/null | head -n 1)
+        IMAGE=$(find out/msm-waipio-waipio-gki -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
+        IMAGE_LZ4=$(find out/msm-waipio-waipio-gki -name "Image.lz4" 2>/dev/null | head -n 1)
 
         if [ ! -f "$IMAGE" ]; then
           echo "❌ Image not found"
@@ -249,26 +147,24 @@ jobs:
           exit 1
         fi
 
+        echo "✅ Image: $(du -h "$IMAGE")"
         mkdir -p artifacts
-
         cp "$IMAGE" artifacts/Image
-
-        if [ -f "$IMAGE_LZ4" ]; then
-          cp "$IMAGE_LZ4" artifacts/Image.lz4
-        fi
+        [ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4
 
         SERVER=$(curl -s https://api.gofile.io/servers | \
           python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
 
-        RESP=$(curl -s \
-          -F "file=@artifacts/Image" \
-          "https://$SERVER.gofile.io/uploadFile")
+        RESP=$(curl -s -F "file=@artifacts/Image" "https://$SERVER.gofile.io/uploadFile")
+        echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
 
-        echo "Image uploaded:"
-        echo "$RESP"
+        if [ -f artifacts/Image.lz4 ]; then
+          RESP=$(curl -s -F "file=@artifacts/Image.lz4" "https://$SERVER.gofile.io/uploadFile")
+          echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+        fi
 
     - name: Upload to GitHub Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-KSUNext-Image
+        name: Fold4-NoKSU-ConfigTest
         path: artifacts/
