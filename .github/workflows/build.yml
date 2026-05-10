@@ -107,38 +107,34 @@ jobs:
       run: |
         STOCK_CONFIG="configs/stock_config.txt"
         
-        # Create overrides file with clean indentation
+        # Write exact requested overrides to temp file
         cat << 'EOF' > /tmp/ksu_overrides.txt
-        CONFIG_UH=n
-        CONFIG_RKP=n
-        CONFIG_KDP=n
-        CONFIG_KDP_CRED=n
-        CONFIG_KDP_NS=n
-        CONFIG_CFI_CLANG=n
-        CONFIG_CFI_CLANG_SHADOW=n
-        CONFIG_LTO_CLANG_FULL=n
-        CONFIG_LTO_NONE=y
+        CONFIG_UH=y
+        CONFIG_RKP=y
+        CONFIG_KDP=y
+        CONFIG_FASTUH=n
+        CONFIG_FASTUH_RKP=n
+        CONFIG_FASTUH_KDP=n
         CONFIG_SECURITY_DEFEX=n
         CONFIG_PROCA=n
         CONFIG_PROCA_GKI_10=n
         CONFIG_PROCA_S_OS=n
-        CONFIG_PROCA_CERTIFICATES_XATTR=n
-        CONFIG_PROCA_DEBUG=n
         CONFIG_FIVE=n
         CONFIG_FIVE_GKI_10=n
-        CONFIG_FIVE_TRUSTED_KEYRING=n
         CONFIG_GAF=n
         CONFIG_GAF_V6=n
+        CONFIG_CFI_CLANG=y
+        CONFIG_LTO_CLANG_THIN=y
         EOF
-        
-        # Remove leading whitespace from the generated file
+
+        # Clean leading tabs/spaces to prevent kernel config errors
         sed -i 's/^[[:space:]]*//' /tmp/ksu_overrides.txt
 
         find kernel_platform -type f -name "gki_defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           cp "$STOCK_CONFIG" "$config"
           cat /tmp/ksu_overrides.txt >> "$config"
-          echo "Patched $config with stock base + KSU overrides"
+          echo "Patched $config with requested Samsung/CFI settings"
         done
 
     - name: Build kernel
@@ -150,7 +146,8 @@ jobs:
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu -Wno-unused-result" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
           kernel_platform/build/build.sh
 
-        export LTO=none
+        # Set LTO to thin as requested in defconfig
+        export LTO=thin
         bash build_kernel_GKI.sh || true
 
     - name: Upload Image to GoFile
@@ -185,4 +182,3 @@ jobs:
       with:
         name: Fold4-KSUNext-Image
         path: artifacts/
-
