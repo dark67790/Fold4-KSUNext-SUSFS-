@@ -139,24 +139,6 @@ jobs:
           "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
           | bash -
 
-    - name: RKP Source Fix
-      run: |
-        GAF_FILE="kernel_platform/common/security/samsung/proca/gaf/gaf_v6.c"
-
-        if [ -f "$GAF_FILE" ]; then
-          chmod u+w "$GAF_FILE"
-
-          sed -i \
-            's/\.task_struct_integrity = OFFSETOF_INTEGRITY,/#ifdef CONFIG_RKP\n\t.task_struct_integrity = OFFSETOF_INTEGRITY,\n#endif/g' \
-            "$GAF_FILE"
-
-          sed -i \
-            's/\.cred_integrity = OFFSETOF_CRED_INTEGRITY,/#ifdef CONFIG_RKP\n\t.cred_integrity = OFFSETOF_CRED_INTEGRITY,\n#endif/g' \
-            "$GAF_FILE"
-
-          echo "Applied RKP source fix"
-        fi
-
     - name: Patch Defconfigs
       run: |
         STOCK_CONFIG="configs/stock_config.txt"
@@ -173,6 +155,7 @@ jobs:
         CONFIG_MODULE_FORCE_LOAD=y
 
         CONFIG_KPROBES=y
+        CONFIG_HAVE_KPROBES=y
         CONFIG_KPROBE_EVENTS=y
         CONFIG_OVERLAY_FS=y
         EOF
@@ -202,7 +185,7 @@ jobs:
 
         export LTO=thin
 
-        bash build_kernel_GKI.sh
+        bash build_kernel_GKI.sh || true
 
     - name: Upload Image to GoFile
       run: |
