@@ -90,26 +90,20 @@ jobs:
     - name: Setup SUSFS Kernel Patches
       working-directory: kernel_platform/common
       run: |
-        # Clone susfs source
         git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git \
           -b gki-android12-5.10 /tmp/susfs4ksu
 
-        # Copy new source files into kernel tree
         cp /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
         cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
         cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || true
 
-        # Apply main SUSFS kernel patch (5 hunks will fail — fixed below)
         patch -p1 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch || true
 
-        # Fix the 5 rejected hunks
         python3 $GITHUB_WORKSPACE/patches/susfs_hunk_fix.py
 
-        # Apply wild a12-5.10 supplemental patch for proc/base.c
         curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/wild/susfs_fix_patches/v2.1.0/a12-5.10/base.c.patch" \
           | patch -p1 || true
 
-        # Cleanup leftover patch artifacts
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
 
@@ -128,25 +122,23 @@ jobs:
           fi
         }
 
-        check "susfs.c exists"           fs/susfs.c                    "susfs"
-        check "susfs.h exists"           include/linux/susfs.h         "susfs"
-        check "susfs_def.h exists"       include/linux/susfs_def.h     "susfs"
-        check "fs/Makefile compiles susfs" fs/Makefile                 "susfs.o"
-        check "exec.c patched"           fs/exec.c                     "susfs_def.h"
-        check "namespace.c include"      fs/namespace.c                "CONFIG_KSU_SUSFS_SUS_MOUNT"
-        check "namespace.c externs"      fs/namespace.c                "susfs_is_current_ksu_domain"
-        check "namespace.c copy_flags"   fs/namespace.c                "CL_COPY_MNT_NS"
-        check "open.c patched"           fs/open.c                     "is_inode_open_redirect"
-        check "proc/base.c include"      fs/proc/base.c                "susfs_def.h"
-        check "proc/base.c SUS_MAP"      fs/proc/base.c                "AS_FLAGS_SUS_MAP"
-        check "fdinfo.c patched"         fs/notify/fdinfo.c            "DEFAULT_KSU_MNT_ID"
+        check "susfs.c exists"             fs/susfs.c                 "susfs"
+        check "susfs.h exists"             include/linux/susfs.h      "susfs"
+        check "susfs_def.h exists"         include/linux/susfs_def.h  "susfs"
+        check "fs/Makefile compiles susfs" fs/Makefile                "susfs.o"
+        check "exec.c patched"             fs/exec.c                  "susfs_def.h"
+        check "namespace.c SUS_MOUNT"      fs/namespace.c             "CONFIG_KSU_SUSFS_SUS_MOUNT"
+        check "namespace.c externs"        fs/namespace.c             "susfs_is_current_ksu_domain"
+        check "namespace.c copy_flags"     fs/namespace.c             "CL_COPY_MNT_NS"
+        check "open.c patched"             fs/open.c                  "is_inode_open_redirect"
+        check "proc/base.c include"        fs/proc/base.c             "susfs_def.h"
+        check "proc/base.c SUS_MAP"        fs/proc/base.c             "AS_FLAGS_SUS_MAP"
+        check "fdinfo.c patched"           fs/notify/fdinfo.c         "DEFAULT_KSU_MNT_ID"
 
         if [ "$FAIL" -ne 0 ]; then
-          echo ""
           echo "❌ One or more SUSFS kernel patch checks failed — aborting"
           exit 1
         fi
-        echo ""
         echo "✅ All SUSFS kernel patch checks passed"
 
     - name: Setup KernelSU-Next with SUSFS
@@ -155,15 +147,18 @@ jobs:
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-        # Apply KSU-Next SUSFS v2.1.0 combined patch
+        # Pin to the exact commit the WildKernels patch was written for
+        git -C KernelSU-Next fetch --unshallow 2>/dev/null || true
+        git -C KernelSU-Next checkout 0daf55582
+
+        # Apply KSU-Next + SUSFS v2.1.0 combined patch
         cd drivers/kernelsu
         curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/wild/ksun-0daf55582-susfs-v2.1.0-e259e7d6.patch" \
           | patch -p2 || true
 
-        # Fix init.c reject (code already removed in newer KSU-Next commits)
+        # Fix init.c reject if needed
         python3 $GITHUB_WORKSPACE/patches/ksun_init_fix.py
 
-        # Cleanup
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
 
@@ -182,37 +177,33 @@ jobs:
           fi
         }
 
-        check "Kconfig has KSU_SUSFS"        Kconfig                    "KSU_SUSFS"
-        check "Kconfig has SUS_MOUNT"        Kconfig                    "KSU_SUSFS_SUS_MOUNT"
-        check "Kconfig has OPEN_REDIRECT"    Kconfig                    "KSU_SUSFS_OPEN_REDIRECT"
-        check "sucompat.c patched"           feature/sucompat.c         "susfs"
-        check "init.c no ksu_late_loaded"    core/init.c                "kernelsu_init"
-        check "no leftover .rej files"       /dev/null                  "" || true
+        check "Kconfig has KSU_SUSFS"     Kconfig               "KSU_SUSFS"
+        check "Kconfig has SUS_MOUNT"     Kconfig               "KSU_SUSFS_SUS_MOUNT"
+        check "Kconfig has OPEN_REDIRECT" Kconfig               "KSU_SUSFS_OPEN_REDIRECT"
+        check "sucompat.c patched"        feature/sucompat.c    "susfs"
+        check "app_profile.c patched"     policy/app_profile.c  "susfs_is_current_ksu_domain"
+        check "init.c has kernelsu_init"  core/init.c           "kernelsu_init"
 
-        # Explicitly check no .rej files remain
         REJS=$(find . -name "*.rej" 2>/dev/null)
         if [ -n "$REJS" ]; then
-          echo "❌ Leftover .rej files found:"
+          echo "❌ Leftover .rej files:"
           echo "$REJS"
           FAIL=1
         else
           echo "✅ No leftover .rej files"
         fi
 
-        # Verify init.c is clean
         if grep -q "ksu_late_loaded" core/init.c 2>/dev/null; then
-          echo "❌ init.c still has ksu_late_loaded — ksun_init_fix.py failed"
+          echo "❌ init.c still has ksu_late_loaded"
           FAIL=1
         else
           echo "✅ init.c clean"
         fi
 
         if [ "$FAIL" -ne 0 ]; then
-          echo ""
           echo "❌ One or more KSU-Next SUSFS checks failed — aborting"
           exit 1
         fi
-        echo ""
         echo "✅ All KSU-Next SUSFS checks passed"
 
     - name: Patch Defconfigs
