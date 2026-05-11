@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-# Fixes the 5 rejected hunks from 50_add_susfs_in_gki-android12-5.10.patch
-# Run from kernel_platform/common/
+# Fixes rejected hunks from 50_add_susfs_in_gki-android12-5.10.patch
+# and wild/a12-5.10/base.c.patch
+# Run from kernel_platform/common/ AFTER both patches have been applied
 
-import re, sys, os
+import re, sys
 
 def fix(path, old, new, label):
     with open(path, 'r') as f:
@@ -14,40 +15,46 @@ def fix(path, old, new, label):
         f.write(s.replace(old, new, 1))
     print(f"✅ {label}")
 
-# 1. fs/exec.c — insert susfs_def.h after io_uring.h
+# Fix 1: fs/exec.c — insert susfs_def.h after io_uring.h
 fix('fs/exec.c',
     '#include <linux/io_uring.h>',
     '#include <linux/io_uring.h>\n#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs_def.h>\n#endif',
     'fs/exec.c')
 
-# 2. fs/namespace.c — include block after shmem_fs.h
+# Fix 2: fs/namespace.c — include block after shmem_fs.h
 fix('fs/namespace.c',
     '#include <linux/shmem_fs.h>',
     '#include <linux/shmem_fs.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT',
     'fs/namespace.c include')
 
-# 3. fs/namespace.c — extern declarations before sysctl_mount_max
+# Fix 3: fs/namespace.c — extern declarations before sysctl_mount_max
 fix('fs/namespace.c',
     '/* Maximum number of mounts in a mount namespace */',
     '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n/* Maximum number of mounts in a mount namespace */',
     'fs/namespace.c externs')
 
-# 4. fs/namespace.c — copy_flags in copy_mnt_ns()
+# Fix 4: fs/namespace.c — copy_flags in copy_mnt_ns() Samsung KDP variant
 fix('fs/namespace.c',
-    'copy_flags |= CL_SHARED_TO_SLAVE;\n\tnew = copy_tree',
-    'copy_flags |= CL_SHARED_TO_SLAVE;\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\tcopy_flags |= CL_COPY_MNT_NS;\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\tnew = copy_tree',
+    'copy_flags |= CL_SHARED_TO_SLAVE;\n#ifdef CONFIG_KDP_NS',
+    'copy_flags |= CL_SHARED_TO_SLAVE;\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\tcopy_flags |= CL_COPY_MNT_NS;\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#ifdef CONFIG_KDP_NS',
     'fs/namespace.c copy_flags')
 
-# 5. fs/open.c — open redirect retry logic
+# Fix 5: fs/open.c — open redirect retry logic
 fix('fs/open.c',
     '\tfd = get_unused_fd_flags(how->flags);\n\tif (fd >= 0) {\n\t\tstruct file *f = do_filp_open(dfd, tmp, &op);',
     '\tfd = get_unused_fd_flags(how->flags);\n#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT\nretry:\n#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT\n\tif (fd >= 0) {\n\t\tstruct file *f = do_filp_open(dfd, tmp, &op);\n\n#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT\n\t\tif (!is_inode_open_redirect && f && !IS_ERR(f)) {\n\t\t\tstruct inode *inode = file_inode(f);\n\t\t\tif (SUSFS_IS_INODE_OPEN_REDIRECT_WITHOUT_UID_CHECK(inode)) {\n\t\t\t\tfake_filename = susfs_open_redirect_spoof_do_sys_openat(inode);\n\t\t\t\tif (fake_filename && !IS_ERR(fake_filename)) {\n\t\t\t\t\tis_inode_open_redirect = true;\n\t\t\t\t\tfilp_close(f, NULL);\n\t\t\t\t\tputname(tmp);\n\t\t\t\t\ttmp = fake_filename;\n\t\t\t\t\tgoto retry;\n\t\t\t\t}\n\t\t\t}\n\t\t}\n#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT',
     'fs/open.c')
 
-# 6. fs/proc/base.c — include after cpufreq_times.h
+# Fix 6: fs/proc/base.c — include after cpufreq_times.h
 fix('fs/proc/base.c',
     '#include <linux/cpufreq_times.h>',
     '#include <linux/cpufreq_times.h>\n#if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux/susfs_def.h>\n#endif // #if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n',
     'fs/proc/base.c')
+
+# Fix 7: fs/proc/base.c — vma undeclared from wild base.c patch
+fix('fs/proc/base.c',
+    '#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\t\t\tvma = find_vma(mm, addr);',
+    '#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\t\t\tstruct vm_area_struct *vma = find_vma(mm, addr);',
+    'fs/proc/base.c vma declaration')
 
 print("\n✅ All susfs hunk fixes done")
