@@ -97,14 +97,11 @@ jobs:
         cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
         cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || true
 
-        # Apply SUSFS base patch
         patch -p1 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch || true
 
-        # Apply WildKernels fix patch
         curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/wild/susfs_fix_patches/v2.1.0/a12-5.10/base.c.patch" \
           | patch -p1 || true
 
-        # Run hunk fix python script AFTER patches
         python3 $GITHUB_WORKSPACE/patches/susfs_hunk_fix.py
 
         find . -name "*.rej" -delete
@@ -136,6 +133,7 @@ jobs:
         check "open.c patched"             fs/open.c                  "is_inode_open_redirect"
         check "proc/base.c include"        fs/proc/base.c             "susfs_def.h"
         check "proc/base.c SUS_MAP"        fs/proc/base.c             "AS_FLAGS_SUS_MAP"
+        check "proc/base.c vma declared"   fs/proc/base.c             "struct vm_area_struct \*vma"
         check "fdinfo.c patched"           fs/notify/fdinfo.c         "DEFAULT_KSU_MNT_ID"
 
         if [ "$FAIL" -ne 0 ]; then
@@ -150,25 +148,17 @@ jobs:
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-        # Pin to the exact commit the WildKernels patch was written for
         git -C KernelSU-Next fetch --unshallow 2>/dev/null || true
         git -C KernelSU-Next checkout 0daf55582
 
-        # Apply KSU-Next + SUSFS v2.1.0 combined patch
-        pushd drivers/kernelsu
+        cd drivers/kernelsu
         curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/wild/ksun-0daf55582-susfs-v2.1.0-e259e7d6.patch" \
           | patch -p2 || true
-        popd
 
-        # Fix for ksys_close() Compiler Error
-        find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/ksys_close(/close_fd(/g' {} +
-        sed -i '1i #include <linux/file.h>\n#include <linux/fs.h>' drivers/kernelsu/supercall/supercall.c
-
-        # Fix init.c reject if needed
         python3 $GITHUB_WORKSPACE/patches/ksun_init_fix.py
 
-        find drivers/kernelsu -name "*.rej" -delete
-        find drivers/kernelsu -name "*.orig" -delete
+        find . -name "*.rej" -delete
+        find . -name "*.orig" -delete
 
     - name: Verify KernelSU-Next SUSFS Integration
       working-directory: kernel_platform/common/drivers/kernelsu
@@ -251,14 +241,12 @@ jobs:
           'CONFIG_KSU_SUSFS_SUS_SU=n' \
           > /tmp/ksu_overrides.txt
 
-        echo "Applying defconfig overrides..."
-
         find kernel_platform -type f -name "gki_defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           cp "$STOCK_CONFIG" "$config"
           cat /tmp/ksu_overrides.txt >> "$config"
+          echo "Patched $config with stock base"
         done
-        echo "✅ Patched gki_defconfigs with stock base"
 
         find kernel_platform -type f \( \
           -name "*.config" \
@@ -267,8 +255,8 @@ jobs:
         \) | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           cat /tmp/ksu_overrides.txt >> "$config"
+          echo "Appended overrides to $config"
         done
-        echo "✅ Appended overrides to all other configs"
 
     - name: Build kernel
       run: |
@@ -314,11 +302,3 @@ jobs:
       with:
         name: Fold4-KSUNext-SUSFS
         path: artifacts/
-
-    - name: Debug namespace copy_flags
-      if: always()
-      working-directory: kernel_platform/common
-      run: |
-        grep -n "CL_SHARED_TO_SLAVE\|copy_tree\|CL_COPY_MNT_NS\|copy_mnt_ns" \
-          fs/namespace.c | tail -20
-
