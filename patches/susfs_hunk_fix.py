@@ -96,4 +96,12 @@ def fix_vma_declaration(path):
 
 fix_vma_declaration('fs/proc/base.c')
 
+# Fix 8: drivers/kernelsu/supercall/supercall.c — ksys_close undeclared
+fix(
+    'drivers/kernelsu/supercall/supercall.c',
+    '#include <linux/version.h>',
+    '#include <linux/version.h>\n#include <linux/syscalls.h>',
+    'supercall.c ksys_close header'
+)
+
 print("\n✅ All susfs hunk fixes done")
