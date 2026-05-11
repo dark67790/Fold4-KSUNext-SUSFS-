@@ -15,6 +15,16 @@ def fix(path, old, new, label):
         f.write(s.replace(old, new, 1))
     print(f"✅ {label}")
 
+def fix_regex(path, pattern, repl, label):
+    with open(path, 'r') as f:
+        s = f.read()
+    if not re.search(pattern, s):
+        print(f"⚠️  {label}: context not found — already applied or source changed")
+        return
+    with open(path, 'w') as f:
+        f.write(re.sub(pattern, repl, s, count=1))
+    print(f"✅ {label}")
+
 # Fix 1: fs/exec.c — insert susfs_def.h after io_uring.h
 fix('fs/exec.c',
     '#include <linux/io_uring.h>',
@@ -49,12 +59,13 @@ fix('fs/open.c',
 fix('fs/proc/base.c',
     '#include <linux/cpufreq_times.h>',
     '#include <linux/cpufreq_times.h>\n#if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux/susfs_def.h>\n#endif // #if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n',
-    'fs/proc/base.c')
+    'fs/proc/base.c include')
 
 # Fix 7: fs/proc/base.c — vma undeclared from wild base.c patch
-fix('fs/proc/base.c',
-    '#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\t\t\tvma = find_vma(mm, addr);',
-    '#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\t\t\tstruct vm_area_struct *vma = find_vma(mm, addr);',
-    'fs/proc/base.c vma declaration')
+# We now use regex so it catches the line regardless of how many spaces/tabs Samsung uses!
+fix_regex('fs/proc/base.c',
+          r'([ \t]+)vma = find_vma\(mm, addr\);',
+          r'\1struct vm_area_struct *vma = find_vma(mm, addr);',
+          'fs/proc/base.c vma declaration')
 
 print("\n✅ All susfs hunk fixes done")
