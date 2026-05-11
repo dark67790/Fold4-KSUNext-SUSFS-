@@ -138,7 +138,7 @@ jobs:
         check "proc/base.c SUS_MAP"        fs/proc/base.c             "AS_FLAGS_SUS_MAP"
         check "fdinfo.c patched"           fs/notify/fdinfo.c         "DEFAULT_KSU_MNT_ID"
 
-        if [ "$FAIL" -ne 0 ]; then
+        if[ "$FAIL" -ne 0 ]; then
           echo "❌ One or more SUSFS kernel patch checks failed — aborting"
           exit 1
         fi
@@ -155,15 +155,23 @@ jobs:
         git -C KernelSU-Next checkout 0daf55582
 
         # Apply KSU-Next + SUSFS v2.1.0 combined patch
-        cd drivers/kernelsu
+        pushd drivers/kernelsu
         curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/wild/ksun-0daf55582-susfs-v2.1.0-e259e7d6.patch" \
           | patch -p2 || true
+        popd
+
+        # ====================================================================
+        # FIX FOR ksys_close() COMPILER ERROR
+        # Linux 5.10 LTS backported close_fd() and removed ksys_close()
+        # ====================================================================
+        find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/ksys_close(/close_fd(/g' {} +
+        sed -i '1i #include <linux/file.h>\n#include <linux/fs.h>' drivers/kernelsu/supercall/supercall.c
 
         # Fix init.c reject if needed
         python3 $GITHUB_WORKSPACE/patches/ksun_init_fix.py
 
-        find . -name "*.rej" -delete
-        find . -name "*.orig" -delete
+        find drivers/kernelsu -name "*.rej" -delete
+        find drivers/kernelsu -name "*.orig" -delete
 
     - name: Verify KernelSU-Next SUSFS Integration
       working-directory: kernel_platform/common/drivers/kernelsu
@@ -188,7 +196,7 @@ jobs:
         check "init.c has kernelsu_init"  core/init.c           "kernelsu_init"
 
         REJS=$(find . -name "*.rej" 2>/dev/null)
-        if [ -n "$REJS" ]; then
+        if[ -n "$REJS" ]; then
           echo "❌ Leftover .rej files:"
           echo "$REJS"
           FAIL=1
@@ -203,7 +211,7 @@ jobs:
           echo "✅ init.c clean"
         fi
 
-        if [ "$FAIL" -ne 0 ]; then
+        if[ "$FAIL" -ne 0 ]; then
           echo "❌ One or more KSU-Next SUSFS checks failed — aborting"
           exit 1
         fi
@@ -276,6 +284,7 @@ jobs:
 
         export LTO=thin
         
+        # We restored the standard bash run command so you can see the log output
         bash build_kernel_GKI.sh || true
 
     - name: Upload Image to GoFile
@@ -283,7 +292,7 @@ jobs:
         IMAGE=$(find out/msm-waipio-waipio-gki -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
         IMAGE_LZ4=$(find out/msm-waipio-waipio-gki -name "Image.lz4" 2>/dev/null | head -n 1)
 
-        if [ ! -f "$IMAGE" ]; then
+        if[ ! -f "$IMAGE" ]; then
           echo "❌ Image not found"
           find out/ -name "Image" 2>/dev/null || true
           exit 1
