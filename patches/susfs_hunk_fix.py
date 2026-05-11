@@ -18,19 +18,6 @@ def fix(path, old, new, label):
 
     print(f"✅ {label}")
 
-def fix_regex(path, pattern, repl, label):
-    with open(path, 'r') as f:
-        s = f.read()
-
-    if not re.search(pattern, s):
-        print(f"⚠️  {label}: context not found — already applied or source changed")
-        return
-
-    with open(path, 'w') as f:
-        f.write(re.sub(pattern, repl, s, count=1))
-
-    print(f"✅ {label}")
-
 # Fix 1: fs/exec.c — insert susfs_def.h after io_uring.h
 fix(
     'fs/exec.c',
@@ -80,12 +67,33 @@ fix(
 )
 
 # Fix 7: fs/proc/base.c — vma undeclared from wild base.c patch
-# Regex version handles Samsung spacing/tab differences
-fix_regex(
-    'fs/proc/base.c',
-    r'([ \t]+)vma = find_vma\(mm, addr\);',
-    r'\1struct vm_area_struct *vma = find_vma(mm, addr);',
-    'fs/proc/base.c vma declaration'
-)
+def fix_vma_declaration(path):
+    with open(path, 'r') as f:
+        lines = f.readlines()
+
+    changed = False
+    prev_was_susfs_ifdef = False
+    result = []
+
+    for line in lines:
+        if prev_was_susfs_ifdef and 'vma = find_vma' in line and 'struct' not in line:
+            line = line.replace(
+                'vma = find_vma',
+                'struct vm_area_struct *vma = find_vma'
+            )
+            changed = True
+
+        prev_was_susfs_ifdef = '#ifdef CONFIG_KSU_SUSFS_SUS_MAP' in line
+        result.append(line)
+
+    if changed:
+        with open(path, 'w') as f:
+            f.writelines(result)
+
+        print("✅ fs/proc/base.c vma declaration")
+    else:
+        print("⚠️  fs/proc/base.c vma declaration: not found")
+
+fix_vma_declaration('fs/proc/base.c')
 
 print("\n✅ All susfs hunk fixes done")
