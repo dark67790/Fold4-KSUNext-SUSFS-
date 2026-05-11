@@ -304,3 +304,10 @@ jobs:
       with:
         name: Fold4-KSUNext-SUSFS
         path: artifacts/
+
+    - name: Debug namespace copy_flags
+      if: always()
+      working-directory: kernel_platform/common
+      run: |
+        grep -n "CL_SHARED_TO_SLAVE\|copy_tree\|CL_COPY_MNT_NS\|copy_mnt_ns" \
+          fs/namespace.c | tail -20
