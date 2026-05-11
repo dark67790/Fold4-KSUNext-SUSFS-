@@ -195,7 +195,7 @@ jobs:
         echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
 
     - name: Upload to GitHub Artifacts
-      uses: artifacts/upload-artifact@v4
+      uses: actions/upload-artifact@v4
       with:
         name: Fold4-KSUNext-SUSFS-Image
         path: artifacts/
