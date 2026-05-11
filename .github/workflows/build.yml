@@ -1,4 +1,4 @@
-name: Build Fold4 Kernel (KSU-Next + SUSFS)
+name: Build Fold4 Kernel (KSU-Next)
 
 on:
   push:
@@ -61,27 +61,38 @@ jobs:
     - name: Setup Host Tools and Sysroot
       run: |
         chmod -R u+w kernel_platform/build
+
         TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
         mkdir -p "$TOOLS_DIR"
+
         find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
+
         rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
+
         printf '#!/bin/bash\nexec /usr/bin/gcc -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
         printf '#!/bin/bash\nexec /usr/bin/g++ -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
+
         chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
 
         KBT=$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64
         mkdir -p "$KBT"
+
         cp /usr/lib/x86_64-linux-gnu/crt1.o "$KBT/"
         cp /usr/lib/x86_64-linux-gnu/crti.o "$KBT/"
         cp /usr/lib/x86_64-linux-gnu/crtn.o "$KBT/"
         cp /usr/lib/x86_64-linux-gnu/Scrt1.o "$KBT/" 2>/dev/null || true
+
         ln -sf /usr/lib/x86_64-linux-gnu/libc.so.6 "$KBT/libc.so.6"
+
         echo "GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a )" > "$KBT/libc.so"
+
         ln -sf /usr/lib/x86_64-linux-gnu "$KBT/../lib64"
 
         SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
         rm -rf "$SYSROOT"
+
         mkdir -p "$SYSROOT/usr"
+
         ln -sf /usr/include "$SYSROOT/usr/include"
         ln -sf /usr/lib "$SYSROOT/usr/lib"
         ln -sf /lib "$SYSROOT/lib"
@@ -91,32 +102,11 @@ jobs:
           echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
         fi
 
-    - name: Setup SUSFS Kernel Patches
-      working-directory: kernel_platform/common
-      run: |
-        git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git \
-          -b gki-android12-5.10 /tmp/susfs4ksu
-        cp /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
-        cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
-        cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || true
-        patch -p1 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch || true
-        python3 $GITHUB_WORKSPACE/patches/susfs_hunk_fix.py
-        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/wild/susfs_fix_patches/v2.1.0/a12-5.10/base.c.patch" \
-          | patch -p1 || true
-        find . -name "*.rej" -delete
-        find . -name "*.orig" -delete
-
-    - name: Setup KernelSU-Next with SUSFS
+    - name: Setup KernelSU-Next
       working-directory: kernel_platform/common
       run: |
         chmod -R u+w .
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
-        cd drivers/kernelsu
-        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/wild/ksun-0daf55582-susfs-v2.1.0-e259e7d6.patch" \
-          | patch -p2 || true
-        python3 $GITHUB_WORKSPACE/patches/ksun_init_fix.py
-        find . -name "*.rej" -delete
-        find . -name "*.orig" -delete
 
     - name: Patch Defconfigs
       run: |
@@ -142,28 +132,15 @@ jobs:
           'CONFIG_HAVE_KPROBES=y' \
           'CONFIG_KPROBE_EVENTS=y' \
           'CONFIG_OVERLAY_FS=y' \
-          'CONFIG_SUSFS=y' \
-          'CONFIG_KSU_SUSFS=y' \
-          'CONFIG_KSU_SUSFS_SUS_PATH=y' \
-          'CONFIG_KSU_SUSFS_SUS_MOUNT=y' \
-          'CONFIG_KSU_SUSFS_SUS_KSTAT=y' \
-          'CONFIG_KSU_SUSFS_SPOOF_UNAME=y' \
-          'CONFIG_KSU_SUSFS_ENABLE_LOG=y' \
-          'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y' \
-          'CONFIG_KSU_SUSFS_TRY_UMOUNT=y' \
-          'CONFIG_KSU_SUSFS_SUS_SU=n' \
-          'CONFIG_KSU_SUSFS_SUS_MAP=y' \
           > /tmp/ksu_overrides.txt
 
-        # Loop 1: Overwrite GKI configs with your stock base file
         find kernel_platform -type f -name "gki_defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           cp "$STOCK_CONFIG" "$config"
           cat /tmp/ksu_overrides.txt >> "$config"
-          echo "✅ Patched $config with stock base"
+          echo "Patched $config with stock base"
         done
 
-        # Loop 2: Append overrides to every single config file found
         find kernel_platform -type f \( \
           -name "*.config" \
           -o -name "*defconfig*" \
@@ -171,31 +148,55 @@ jobs:
         \) | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           cat /tmp/ksu_overrides.txt >> "$config"
-          echo "✅ Appended overrides to $config"
+          echo "Appended overrides to $config"
         done
 
     - name: Build kernel
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
+
         mkdir -p out/target/product/q4q/
+
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu -Wno-unused-result" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
           kernel_platform/build/build.sh
+
         export LTO=thin
         bash build_kernel_GKI.sh || true
 
     - name: Upload Image to GoFile
       run: |
         IMAGE=$(find out/msm-waipio-waipio-gki -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
-        if [ ! -f "$IMAGE" ]; then exit 1; fi
+        IMAGE_LZ4=$(find out/msm-waipio-waipio-gki -name "Image.lz4" 2>/dev/null | head -n 1)
+
+        if [ ! -f "$IMAGE" ]; then
+          echo "❌ Image not found"
+          find out/ -name "Image" 2>/dev/null || true
+          exit 1
+        fi
+
+        echo "✅ Image: $(du -h "$IMAGE")"
+
         mkdir -p artifacts
         cp "$IMAGE" artifacts/Image
-        SERVER=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
+
+        [ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4
+
+        SERVER=$(curl -s https://api.gofile.io/servers | \
+          python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
+
         RESP=$(curl -s -F "file=@artifacts/Image" "https://$SERVER.gofile.io/uploadFile")
+
         echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+
+        if [ -f artifacts/Image.lz4 ]; then
+          RESP=$(curl -s -F "file=@artifacts/Image.lz4" "https://$SERVER.gofile.io/uploadFile")
+
+          echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+        fi
 
     - name: Upload to GitHub Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-KSUNext-SUSFS-Image
+        name: Fold4-KSUNext-Image
         path: artifacts/
