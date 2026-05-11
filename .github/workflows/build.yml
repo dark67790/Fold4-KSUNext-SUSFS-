@@ -138,7 +138,7 @@ jobs:
         check "proc/base.c SUS_MAP"        fs/proc/base.c             "AS_FLAGS_SUS_MAP"
         check "fdinfo.c patched"           fs/notify/fdinfo.c         "DEFAULT_KSU_MNT_ID"
 
-        if[ "$FAIL" -ne 0 ]; then
+        if [ "$FAIL" -ne 0 ]; then
           echo "❌ One or more SUSFS kernel patch checks failed — aborting"
           exit 1
         fi
@@ -160,10 +160,7 @@ jobs:
           | patch -p2 || true
         popd
 
-        # ====================================================================
-        # FIX FOR ksys_close() COMPILER ERROR
-        # Linux 5.10 LTS backported close_fd() and removed ksys_close()
-        # ====================================================================
+        # Fix for ksys_close() Compiler Error
         find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/ksys_close(/close_fd(/g' {} +
         sed -i '1i #include <linux/file.h>\n#include <linux/fs.h>' drivers/kernelsu/supercall/supercall.c
 
@@ -196,7 +193,7 @@ jobs:
         check "init.c has kernelsu_init"  core/init.c           "kernelsu_init"
 
         REJS=$(find . -name "*.rej" 2>/dev/null)
-        if[ -n "$REJS" ]; then
+        if [ -n "$REJS" ]; then
           echo "❌ Leftover .rej files:"
           echo "$REJS"
           FAIL=1
@@ -211,7 +208,7 @@ jobs:
           echo "✅ init.c clean"
         fi
 
-        if[ "$FAIL" -ne 0 ]; then
+        if [ "$FAIL" -ne 0 ]; then
           echo "❌ One or more KSU-Next SUSFS checks failed — aborting"
           exit 1
         fi
@@ -254,7 +251,7 @@ jobs:
           'CONFIG_KSU_SUSFS_SUS_SU=n' \
           > /tmp/ksu_overrides.txt
 
-        echo "Applying defconfig overrides (this might take a few seconds)..."
+        echo "Applying defconfig overrides..."
 
         find kernel_platform -type f -name "gki_defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
@@ -283,8 +280,6 @@ jobs:
           kernel_platform/build/build.sh
 
         export LTO=thin
-        
-        # We restored the standard bash run command so you can see the log output
         bash build_kernel_GKI.sh || true
 
     - name: Upload Image to GoFile
@@ -292,7 +287,7 @@ jobs:
         IMAGE=$(find out/msm-waipio-waipio-gki -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
         IMAGE_LZ4=$(find out/msm-waipio-waipio-gki -name "Image.lz4" 2>/dev/null | head -n 1)
 
-        if[ ! -f "$IMAGE" ]; then
+        if [ ! -f "$IMAGE" ]; then
           echo "❌ Image not found"
           find out/ -name "Image" 2>/dev/null || true
           exit 1
@@ -326,3 +321,4 @@ jobs:
       run: |
         grep -n "CL_SHARED_TO_SLAVE\|copy_tree\|CL_COPY_MNT_NS\|copy_mnt_ns" \
           fs/namespace.c | tail -20
+
