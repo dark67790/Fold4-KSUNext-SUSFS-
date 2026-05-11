@@ -48,14 +48,21 @@ jobs:
     - name: Download Clang and GAS
       run: |
         cd kernel_platform
+
         mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
+
         curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
+
         tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
+
         rm clang.tar.gz
 
         mkdir -p prebuilts/gas/linux-x86
+
         curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
+
         tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
+
         rm gas.tar.gz
 
     - name: Setup Host Tools and Sysroot
@@ -123,8 +130,8 @@ jobs:
           'CONFIG_SECURITY_DEFEX=n' \
           'CONFIG_PROCA=n' \
           'CONFIG_FIVE=n' \
-          'CONFIG_LTO_CLANG_THIN=y' \
-          'CONFIG_LTO_CLANG_FULL=n' \
+          'CONFIG_LTO_CLANG_THIN=n' \
+          'CONFIG_LTO_CLANG_FULL=y' \
           'CONFIG_LTO_NONE=n' \
           'CONFIG_KALLSYMS=y' \
           'CONFIG_KALLSYMS_ALL=y' \
@@ -161,7 +168,8 @@ jobs:
         sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu -Wno-unused-result" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
           kernel_platform/build/build.sh
 
-        export LTO=thin
+        export LTO=full
+
         bash build_kernel_GKI.sh || true
 
     - name: Upload Image to GoFile
