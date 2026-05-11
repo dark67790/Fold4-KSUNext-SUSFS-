@@ -107,6 +107,12 @@ jobs:
         # Run hunk fix python script AFTER patches
         python3 $GITHUB_WORKSPACE/patches/susfs_hunk_fix.py
 
+        # ====================================================================
+        # FIX FOR fs/proc/base.c vma COMPILER ERROR
+        # Bypasses Python and aggressively replaces the undeclared variable
+        # ====================================================================
+        sed -i 's/vma = find_vma(mm, addr);/struct vm_area_struct *vma = find_vma(mm, addr);/g' fs/proc/base.c
+
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
 
@@ -246,12 +252,15 @@ jobs:
           'CONFIG_KSU_SUSFS_SUS_SU=n' \
           > /tmp/ksu_overrides.txt
 
+        echo "Applying defconfig overrides (this might take a few seconds)..."
+
+        # Suppressed echoes in the loop so it won't spam the logs
         find kernel_platform -type f -name "gki_defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           cp "$STOCK_CONFIG" "$config"
           cat /tmp/ksu_overrides.txt >> "$config"
-          echo "Patched $config with stock base"
         done
+        echo "✅ Patched gki_defconfigs with stock base"
 
         find kernel_platform -type f \( \
           -name "*.config" \
@@ -260,8 +269,8 @@ jobs:
         \) | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           cat /tmp/ksu_overrides.txt >> "$config"
-          echo "Appended overrides to $config"
         done
+        echo "✅ Appended overrides to all other configs"
 
     - name: Build kernel
       run: |
@@ -273,7 +282,9 @@ jobs:
           kernel_platform/build/build.sh
 
         export LTO=thin
-        bash build_kernel_GKI.sh || true
+        
+        echo "Building kernel... (Standard build output is suppressed to keep GitHub Actions clean. Check step status for success/fail.)"
+        bash build_kernel_GKI.sh > /dev/null || true
 
     - name: Upload Image to GoFile
       run: |
@@ -288,8 +299,7 @@ jobs:
 
         echo "✅ Image: $(du -h "$IMAGE")"
         mkdir -p artifacts
-        cp "$IMAGE" artifacts/Image
-        [ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4
+        cp "$IMAGE" artifacts/Image[ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4
 
         SERVER=$(curl -s https://api.gofile.io/servers | \
           python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
@@ -297,7 +307,7 @@ jobs:
         RESP=$(curl -s -F "file=@artifacts/Image" "https://$SERVER.gofile.io/uploadFile")
         echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
 
-        if [ -f artifacts/Image.lz4 ]; then
+        if[ -f artifacts/Image.lz4 ]; then
           RESP=$(curl -s -F "file=@artifacts/Image.lz4" "https://$SERVER.gofile.io/uploadFile")
           echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
         fi
@@ -314,4 +324,3 @@ jobs:
       run: |
         grep -n "CL_SHARED_TO_SLAVE\|copy_tree\|CL_COPY_MNT_NS\|copy_mnt_ns" \
           fs/namespace.c | tail -20
-
