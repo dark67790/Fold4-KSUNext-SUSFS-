@@ -97,12 +97,15 @@ jobs:
         cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
         cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || true
 
+        # Apply SUSFS base patch
         patch -p1 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch || true
 
-        python3 $GITHUB_WORKSPACE/patches/susfs_hunk_fix.py
-
+        # Apply WildKernels fix patch
         curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/wild/susfs_fix_patches/v2.1.0/a12-5.10/base.c.patch" \
           | patch -p1 || true
+
+        # Run hunk fix python script AFTER patches
+        python3 $GITHUB_WORKSPACE/patches/susfs_hunk_fix.py
 
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
@@ -311,3 +314,4 @@ jobs:
       run: |
         grep -n "CL_SHARED_TO_SLAVE\|copy_tree\|CL_COPY_MNT_NS\|copy_mnt_ns" \
           fs/namespace.c | tail -20
+
