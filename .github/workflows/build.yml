@@ -121,6 +121,7 @@ jobs:
     - name: Patch Defconfigs
       run: |
         STOCK_CONFIG="configs/stock_config.txt"
+
         printf '%s\n' \
           'CONFIG_UH=n' \
           'CONFIG_UH_RKP=n' \
@@ -154,15 +155,23 @@ jobs:
           'CONFIG_KSU_SUSFS_SUS_MAP=y' \
           > /tmp/ksu_overrides.txt
 
+        # Loop 1: Overwrite GKI configs with your stock base file
         find kernel_platform -type f -name "gki_defconfig" | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           cp "$STOCK_CONFIG" "$config"
           cat /tmp/ksu_overrides.txt >> "$config"
+          echo "✅ Patched $config with stock base"
         done
 
-        find kernel_platform -type f \( -name "*.config" -o -name "*defconfig*" -o -name "lego.config" \) | while read -r config; do
+        # Loop 2: Append overrides to every single config file found
+        find kernel_platform -type f \( \
+          -name "*.config" \
+          -o -name "*defconfig*" \
+          -o -name "lego.config" \
+        \) | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           cat /tmp/ksu_overrides.txt >> "$config"
+          echo "✅ Appended overrides to $config"
         done
 
     - name: Build kernel
@@ -186,8 +195,7 @@ jobs:
         echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
 
     - name: Upload to GitHub Artifacts
-      uses: actions/upload-artifact@v4
+      uses: artifacts/upload-artifact@v4
       with:
         name: Fold4-KSUNext-SUSFS-Image
         path: artifacts/
-
