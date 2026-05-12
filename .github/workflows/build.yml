@@ -146,26 +146,13 @@ jobs:
       working-directory: kernel_platform/common
       run: |
         chmod -R u+w .
-        # Initial Setup
-        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
-
-        # Pinning logic re-added here
-        git -C KernelSU-Next fetch --unshallow 2>/dev/null || true
-        git -C KernelSU-Next checkout 0daf55582
-
-        cd drivers/kernelsu
-        # Apply combined patch
-        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/wild/ksun-0daf55582-susfs-v2.1.0-e259e7d6.patch" \
-          | patch -p2 || true
-
-        # Apply supercall fix for ksys_close
-        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/next/susfs_fix_patches/v2.1.0/fix_supercall.c.patch" \
-          | patch -p1 || true
+        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next-susfs/kernel/setup.sh" \
+          | bash -s next-susfs
 
         python3 $GITHUB_WORKSPACE/patches/ksun_init_fix.py
 
-        find . -name "*.rej" -delete
-        find . -name "*.orig" -delete
+        find drivers/kernelsu -name "*.rej" -delete
+        find drivers/kernelsu -name "*.orig" -delete
 
     - name: Verify KernelSU-Next SUSFS Integration
       working-directory: kernel_platform/common/drivers/kernelsu
@@ -309,4 +296,3 @@ jobs:
       with:
         name: Fold4-KSUNext-SUSFS
         path: artifacts/
-
