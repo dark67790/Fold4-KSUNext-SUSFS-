@@ -146,7 +146,8 @@ jobs:
       working-directory: kernel_platform/common
       run: |
         chmod -R u+w .
-        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next-susfs/kernel/setup.sh" \
+        # Using the known valid path for setup.sh on the next branch
+        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
           | bash -s next-susfs
 
         python3 $GITHUB_WORKSPACE/patches/ksun_init_fix.py
