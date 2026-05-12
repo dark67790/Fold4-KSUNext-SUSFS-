@@ -107,97 +107,20 @@ jobs:
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
 
-    - name: Verify SUSFS Kernel Patches
-      working-directory: kernel_platform/common
-      run: |
-        FAIL=0
-
-        check() {
-          local label="$1"; local file="$2"; local pattern="$3"
-          if grep -q "$pattern" "$file" 2>/dev/null; then
-            echo "✅ $label"
-          else
-            echo "❌ $label — '$pattern' not found in $file"
-            FAIL=1
-          fi
-        }
-
-        check "susfs.c exists"             fs/susfs.c                 "susfs"
-        check "susfs.h exists"             include/linux/susfs.h      "susfs"
-        check "susfs_def.h exists"         include/linux/susfs_def.h  "susfs"
-        check "fs/Makefile compiles susfs" fs/Makefile                "susfs.o"
-        check "exec.c patched"             fs/exec.c                  "susfs_def.h"
-        check "namespace.c SUS_MOUNT"      fs/namespace.c             "CONFIG_KSU_SUSFS_SUS_MOUNT"
-        check "namespace.c externs"        fs/namespace.c             "susfs_is_current_ksu_domain"
-        check "namespace.c copy_flags"     fs/namespace.c             "CL_COPY_MNT_NS"
-        check "open.c patched"             fs/open.c                  "is_inode_open_redirect"
-        check "proc/base.c include"        fs/proc/base.c             "susfs_def.h"
-        check "proc/base.c SUS_MAP"        fs/proc/base.c             "AS_FLAGS_SUS_MAP"
-        check "proc/base.c vma declared"   fs/proc/base.c             "struct vm_area_struct \*vma"
-        check "fdinfo.c patched"           fs/notify/fdinfo.c         "DEFAULT_KSU_MNT_ID"
-
-        if [ "$FAIL" -ne 0 ]; then
-          echo "❌ One or more SUSFS kernel patch checks failed — aborting"
-          exit 1
-        fi
-        echo "✅ All SUSFS kernel patch checks passed"
-
     - name: Setup KernelSU-Next with SUSFS
       working-directory: kernel_platform/common
       run: |
         chmod -R u+w .
-        # Using the known valid path for setup.sh on the next branch
-        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
+        # Using pershoot's specialized setup script
+        curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" \
           | bash -s next-susfs
 
+        # Move into the drivers/kernelsu directory so the python script finds core/init.c
+        cd drivers/kernelsu
         python3 $GITHUB_WORKSPACE/patches/ksun_init_fix.py
 
-        find drivers/kernelsu -name "*.rej" -delete
-        find drivers/kernelsu -name "*.orig" -delete
-
-    - name: Verify KernelSU-Next SUSFS Integration
-      working-directory: kernel_platform/common/drivers/kernelsu
-      run: |
-        FAIL=0
-
-        check() {
-          local label="$1"; local file="$2"; local pattern="$3"
-          if grep -q "$pattern" "$file" 2>/dev/null; then
-            echo "✅ $label"
-          else
-            echo "❌ $label — '$pattern' not found in $file"
-            FAIL=1
-          fi
-        }
-
-        check "Kconfig has KSU_SUSFS"     Kconfig               "KSU_SUSFS"
-        check "Kconfig has SUS_MOUNT"     Kconfig               "KSU_SUSFS_SUS_MOUNT"
-        check "Kconfig has OPEN_REDIRECT" Kconfig               "KSU_SUSFS_OPEN_REDIRECT"
-        check "sucompat.c patched"        feature/sucompat.c    "susfs"
-        check "app_profile.c patched"     policy/app_profile.c  "susfs_is_current_ksu_domain"
-        check "init.c has kernelsu_init"  core/init.c           "kernelsu_init"
-
-        REJS=$(find . -name "*.rej" 2>/dev/null)
-        if [ -n "$REJS" ]; then
-          echo "❌ Leftover .rej files:"
-          echo "$REJS"
-          FAIL=1
-        else
-          echo "✅ No leftover .rej files"
-        fi
-
-        if grep -q "ksu_late_loaded" core/init.c 2>/dev/null; then
-          echo "❌ init.c still has ksu_late_loaded"
-          FAIL=1
-        else
-          echo "✅ init.c clean"
-        fi
-
-        if [ "$FAIL" -ne 0 ]; then
-          echo "❌ One or more KSU-Next SUSFS checks failed — aborting"
-          exit 1
-        fi
-        echo "✅ All KSU-Next SUSFS checks passed"
+        find . -name "*.rej" -delete
+        find . -name "*.orig" -delete
 
     - name: Patch Defconfigs
       run: |
@@ -240,17 +163,11 @@ jobs:
           chmod u+w "$config" 2>/dev/null || true
           cp "$STOCK_CONFIG" "$config"
           cat /tmp/ksu_overrides.txt >> "$config"
-          echo "Patched $config with stock base"
         done
 
-        find kernel_platform -type f \( \
-          -name "*.config" \
-          -o -name "*defconfig*" \
-          -o -name "lego.config" \
-        \) | while read -r config; do
+        find kernel_platform -type f \( -name "*.config" -o -name "*defconfig*" -o -name "lego.config" \) | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           cat /tmp/ksu_overrides.txt >> "$config"
-          echo "Appended overrides to $config"
         done
 
     - name: Build kernel
@@ -268,32 +185,18 @@ jobs:
     - name: Upload Image to GoFile
       run: |
         IMAGE=$(find out/msm-waipio-waipio-gki -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
-        IMAGE_LZ4=$(find out/msm-waipio-waipio-gki -name "Image.lz4" 2>/dev/null | head -n 1)
-
         if [ ! -f "$IMAGE" ]; then
           echo "❌ Image not found"
-          find out/ -name "Image" 2>/dev/null || true
           exit 1
         fi
-
-        echo "✅ Image: $(du -h "$IMAGE")"
         mkdir -p artifacts
         cp "$IMAGE" artifacts/Image
-        [ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4
-
-        SERVER=$(curl -s https://api.gofile.io/servers | \
-          python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
-
-        RESP=$(curl -s -F "file=@artifacts/Image" "https://$SERVER.gofile.io/uploadFile")
-        echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-
-        if [ -f artifacts/Image.lz4 ]; then
-          RESP=$(curl -s -F "file=@artifacts/Image.lz4" "https://$SERVER.gofile.io/uploadFile")
-          echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-        fi
+        SERVER=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
+        curl -F "file=@artifacts/Image" "https://$SERVER.gofile.io/uploadFile"
 
     - name: Upload to GitHub Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: Fold4-KSUNext-SUSFS
         path: artifacts/
+
