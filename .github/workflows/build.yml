@@ -83,6 +83,9 @@ jobs:
     - name: Setup SUSFS Kernel Patches
       working-directory: kernel_platform/common
       run: |
+        # Fix read‑only files from Samsung’s archive
+        chmod -R u+w .
+
         git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git \
           -b gki-android12-5.10 /tmp/susfs4ksu
 
