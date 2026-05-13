@@ -1,8 +1,6 @@
 name: Build Fold4 Kernel (KSU-Next + SUSFS)
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -97,30 +95,152 @@ jobs:
         cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
         cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || true
 
+        # Pre-process open.c — remove DEFEX blocks so SUSFS hunk applies cleanly
+        sed -i '/#ifdef CONFIG_SECURITY_DEFEX/,/^#endif/d' fs/open.c
+
+        # Pre-process namespace.c — remove KDP_NS conditional so SUSFS hunk applies cleanly
+        sed -i '/copy_flags = CL_COPY_UNBINDABLE | CL_EXPIRE;/,/#endif/ {
+          /#ifdef CONFIG_KDP_NS/,/#endif/ {
+             /#else/,/#endif/!d
+             /#else/d
+             /#endif/d
+          }
+        }' fs/namespace.c
+
+        # Apply main SUSFS kernel patch
         patch -p1 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch || true
 
+        # Apply wild a12-5.10 supplemental patch for proc/base.c
         curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/wild/susfs_fix_patches/v2.1.0/a12-5.10/base.c.patch" \
           | patch -p1 || true
 
+        # Fix remaining Samsung-specific rejected hunks
         python3 $GITHUB_WORKSPACE/patches/susfs_hunk_fix.py
 
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
 
+    - name: Verify SUSFS Kernel Patches
+      working-directory: kernel_platform/common
+      run: |
+        FAIL=0
+        check() {
+          local label="$1"; local file="$2"; local pattern="$3"
+          if grep -q "$pattern" "$file" 2>/dev/null; then
+            echo "✅ $label"
+          else
+            echo "❌ $label — '$pattern' not found in $file"
+            FAIL=1
+          fi
+        }
+
+        check "susfs.c exists"             fs/susfs.c                      "susfs"
+        check "susfs.h exists"             include/linux/susfs.h           "susfs"
+        check "susfs_def.h exists"         include/linux/susfs_def.h       "susfs"
+        check "fs/Makefile compiles susfs" fs/Makefile                     "susfs.o"
+        check "exec.c patched"             fs/exec.c                       "susfs_def.h"
+        check "namespace.c SUS_MOUNT"      fs/namespace.c                  "CONFIG_KSU_SUSFS_SUS_MOUNT"
+        check "namespace.c externs"        fs/namespace.c                  "susfs_is_current_ksu_domain"
+        check "namespace.c copy_flags"     fs/namespace.c                  "CL_COPY_MNT_NS"
+        check "open.c patched"             fs/open.c                       "is_inode_open_redirect"
+        check "proc/base.c include"        fs/proc/base.c                  "susfs_def.h"
+        check "proc/base.c SUS_MAP"        fs/proc/base.c                  "AS_FLAGS_SUS_MAP"
+        check "proc/base.c vma declared"   fs/proc/base.c                  "struct vm_area_struct \*vma"
+        check "fdinfo.c patched"           fs/notify/fdinfo.c              "DEFAULT_KSU_MNT_ID"
+        check "hooks.c ksu_selinux ref"    security/selinux/hooks.c        "ksu_selinux_hide_running"
+
+        REJS=$(find . -name "*.rej" 2>/dev/null)
+        if [ -n "$REJS" ]; then
+          echo "❌ Leftover .rej files: $REJS"
+          FAIL=1
+        else
+          echo "✅ No leftover .rej files"
+        fi
+
+        if [ "$FAIL" -ne 0 ]; then
+          echo "❌ SUSFS kernel patch checks failed — aborting"
+          exit 1
+        fi
+        echo "✅ All SUSFS kernel patch checks passed"
+
     - name: Setup KernelSU-Next with SUSFS
       working-directory: kernel_platform/common
       run: |
         chmod -R u+w .
-        # Using pershoot's specialized setup script
-        curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" \
-          | bash -s next-susfs
+        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
+          | bash -s dev
 
-        # Move into the drivers/kernelsu directory so the python script finds core/init.c
-        cd drivers/kernelsu
+        # Pin to exact commit WildKernels uses
+        git -C KernelSU-Next fetch --unshallow 2>/dev/null || true
+        git -C KernelSU-Next checkout 551ad80473f60e052917aec08abf5323b6ab2f7c
+
+        # Apply 10_enable_susfs_for_ksu.patch from KernelSU-Next/ with -p1
+        # Many hunks fail (original KSU patch) — fix patches below handle them
+        cp /tmp/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU-Next/
+        cd KernelSU-Next
+        patch -p1 --batch < 10_enable_susfs_for_ksu.patch || true
+        rm 10_enable_susfs_for_ksu.patch
+
+        # Apply WildKernels v2.1.0 fix patches from KernelSU-Next/ with -p1
+        for p in fix_Kbuild fix_Makefile fix_init.c fix_kernel_umount.c \
+                  fix_setuid_hook.c fix_sucompat.c fix_sucompat.h \
+                  fix_supercall.c ksu_toolkit overwrite_hook_mode; do
+          curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/next/susfs_fix_patches/v2.1.0/${p}.patch" \
+            | patch -p1 --batch || true
+        done
+
+        # Run ksun_init_fix.py from drivers/kernelsu (symlink to KernelSU-Next/kernel in CI)
+        cd $GITHUB_WORKSPACE/kernel_platform/common/drivers/kernelsu
         python3 $GITHUB_WORKSPACE/patches/ksun_init_fix.py
 
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
+
+    - name: Verify KernelSU-Next SUSFS Integration
+      working-directory: kernel_platform/common/drivers/kernelsu
+      run: |
+        FAIL=0
+        check() {
+          local label="$1"; local file="$2"; local pattern="$3"
+          if grep -q "$pattern" "$file" 2>/dev/null; then
+            echo "✅ $label"
+          else
+            echo "❌ $label — '$pattern' not found in $file"
+            FAIL=1
+          fi
+        }
+
+        check "Kconfig has KSU_SUSFS"          Kconfig                          "KSU_SUSFS"
+        check "Kconfig has SUS_MOUNT"          Kconfig                          "KSU_SUSFS_SUS_MOUNT"
+        check "Kconfig has OPEN_REDIRECT"      Kconfig                          "KSU_SUSFS_OPEN_REDIRECT"
+        check "sucompat.c patched"             feature/sucompat.c               "susfs"
+        check "selinux hide defined"           selinux/selinux.c                "ksu_selinux_hide_running"
+        check "fake_state defined"             selinux/selinux.c                "fake_state"
+        check "static keys defined"            runtime/ksud_integration.c       "DEFINE_STATIC_KEY_TRUE"
+        check "su_compat_enabled defined"      feature/sucompat.c               "ksu_su_compat_enabled"
+        check "supercall syscalls.h"           supercall/supercall.c            "linux/syscalls.h"
+
+        REJS=$(find . -name "*.rej" 2>/dev/null)
+        if [ -n "$REJS" ]; then
+          echo "❌ Leftover .rej files:"
+          echo "$REJS"
+          FAIL=1
+        else
+          echo "✅ No leftover .rej files"
+        fi
+
+        if grep -q "ksu_late_loaded" core/init.c 2>/dev/null; then
+          echo "❌ init.c still has ksu_late_loaded"
+          FAIL=1
+        else
+          echo "✅ init.c clean"
+        fi
+
+        if [ "$FAIL" -ne 0 ]; then
+          echo "❌ KSU-Next SUSFS checks failed — aborting"
+          exit 1
+        fi
+        echo "✅ All KSU-Next SUSFS checks passed"
 
     - name: Patch Defconfigs
       run: |
@@ -147,6 +267,7 @@ jobs:
           'CONFIG_KPROBE_EVENTS=y' \
           'CONFIG_OVERLAY_FS=y' \
           'CONFIG_KSU=y' \
+          'CONFIG_KSU_WITH_KPROBES=n' \
           'CONFIG_KSU_SUSFS=y' \
           'CONFIG_KSU_SUSFS_SUS_PATH=y' \
           'CONFIG_KSU_SUSFS_SUS_MOUNT=y' \
@@ -163,11 +284,17 @@ jobs:
           chmod u+w "$config" 2>/dev/null || true
           cp "$STOCK_CONFIG" "$config"
           cat /tmp/ksu_overrides.txt >> "$config"
+          echo "Patched $config with stock base"
         done
 
-        find kernel_platform -type f \( -name "*.config" -o -name "*defconfig*" -o -name "lego.config" \) | while read -r config; do
+        find kernel_platform -type f \( \
+          -name "*.config" \
+          -o -name "*defconfig*" \
+          -o -name "lego.config" \
+        \) | while read -r config; do
           chmod u+w "$config" 2>/dev/null || true
           cat /tmp/ksu_overrides.txt >> "$config"
+          echo "Appended overrides to $config"
         done
 
     - name: Build kernel
@@ -185,18 +312,32 @@ jobs:
     - name: Upload Image to GoFile
       run: |
         IMAGE=$(find out/msm-waipio-waipio-gki -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
+        IMAGE_LZ4=$(find out/msm-waipio-waipio-gki -name "Image.lz4" 2>/dev/null | head -n 1)
+
         if [ ! -f "$IMAGE" ]; then
           echo "❌ Image not found"
+          find out/ -name "Image" 2>/dev/null || true
           exit 1
         fi
+
+        echo "✅ Image: $(du -h "$IMAGE")"
         mkdir -p artifacts
         cp "$IMAGE" artifacts/Image
-        SERVER=$(curl -s https://api.gofile.io/servers | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
-        curl -F "file=@artifacts/Image" "https://$SERVER.gofile.io/uploadFile"
+        [ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4
+
+        SERVER=$(curl -s https://api.gofile.io/servers | \
+          python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
+
+        RESP=$(curl -s -F "file=@artifacts/Image" "https://$SERVER.gofile.io/uploadFile")
+        echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+
+        if [ -f artifacts/Image.lz4 ]; then
+          RESP=$(curl -s -F "file=@artifacts/Image.lz4" "https://$SERVER.gofile.io/uploadFile")
+          echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+        fi
 
     - name: Upload to GitHub Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: Fold4-KSUNext-SUSFS
         path: artifacts/
-
