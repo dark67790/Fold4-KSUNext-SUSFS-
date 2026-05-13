@@ -59,10 +59,13 @@ jobs:
       run: |
         pip install -q gdown
         gdown "1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2-" -O samsung.zip
+        gdown "1z4U2GRukJ5xNRyvKaYj7XLkzdWbG0qnX" -O toolchain.tar.gz
         unzip -q samsung.zip
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
+        tar -xzf toolchain.tar.gz -C kernel_platform/
+        rm toolchain.tar.gz
 
     # ── 6. Patch build target ──────────────────────────────────────────────────
     - name: Patch Build Target
