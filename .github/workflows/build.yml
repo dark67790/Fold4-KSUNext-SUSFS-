@@ -39,11 +39,11 @@ jobs:
         rmz_version: "3.1.1"
         testing: false
 
-    # ── 3. Swap (for LTO) ──────────────────────────────────────────────────────
+    # ── 3. Swap ────────────────────────────────────────────────────────────────
     - name: Setup Swap
       uses: thejerrybao/setup-swap-space@v1
       with:
-        swap-size-gb: 25
+        swap-size-gb: 12
 
     # ── 4. Dependencies ────────────────────────────────────────────────────────
     - name: Install Dependencies
@@ -54,7 +54,7 @@ jobs:
           python3-pip unzip git patch coreutils curl \
           build-essential cpio wget zip
 
-    # ── 5. Samsung source ──────────────────────────────────────────────────────
+    # ── 5. Samsung source + toolchain ──────────────────────────────────────────
     - name: Download and Extract Samsung Source
       run: |
         pip install -q gdown
@@ -254,7 +254,8 @@ jobs:
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         mkdir -p out/target/product/q4q/
-        export LTO=thin
+        export LTO=full
+        export KBUILD_MODPOST_WARN=1
         bash build_kernel_GKI.sh || true
 
     # ── 14. Package and upload (only if Image exists) ──────────────────────────
@@ -264,7 +265,7 @@ jobs:
         OUT_DIR=$(find out -type d -name "msm-waipio-waipio-gki" 2>/dev/null | head -n1)
 
         if [ ! -f "$OUT_DIR/Image" ]; then
-          echo "❌ Image not found — skipping upload"
+          echo "❌ Image not found — build likely failed"
           exit 1
         fi
 
@@ -310,4 +311,3 @@ jobs:
         else
           echo "✅ No rejected patches"
         fi
-
