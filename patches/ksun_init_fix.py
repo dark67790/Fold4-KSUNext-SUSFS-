@@ -75,4 +75,23 @@ fix('selinux/selinux.c',
     '#include "ksu.h"\n#include "security.h"\n\nbool ksu_selinux_hide_running __read_mostly = false;\nstruct selinux_state fake_state;',
     'selinux/selinux.c fake_state + ksu_selinux_hide_running')
 
+
+# --- Fix 5: hook/setuid_hook.c ---
+# define missing functions that fix_setuid_hook.c.patch requires
+fix('hook/setuid_hook.c',
+    '#include <linux/susfs_def.h>',
+    '''#include <linux/susfs_def.h>
+
+static inline bool is_zygote_normal_app_uid(uid_t uid)
+{
+\treturn uid >= 10000 && uid < 99999;
+}
+
+static inline void ksu_handle_extra_susfs_work(void)
+{
+\t/* SUSFS extra work handled via susfs_set_current_proc_umounted */
+}''',
+    'setuid_hook.c missing function definitions')
+
+
 print("\n✅ All ksun fixes done")
