@@ -1,90 +1,82 @@
 name: Build Fold4 Kernel (KSU-Next + SUSFS)
 
+permissions:
+  contents: write
+  actions: write
+
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    name: SM-F936B · KSU-Next · SUSFS v2.1.0
+    runs-on: ubuntu-latest
 
     steps:
+    # ── 1. Checkout ────────────────────────────────────────────────────────────
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Free Disk Space and Create Swap
-      run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm /usr/share/swift
-        sudo apt-get clean
-        sudo dd if=/dev/zero of=/swapfile-extra bs=1M count=12288 status=progress
-        sudo chmod 600 /swapfile-extra
-        sudo mkswap /swapfile-extra
-        sudo swapon /swapfile-extra
-        free -h
+    # ── 2. Free disk space ─────────────────────────────────────────────────────
+    - name: Free Disk Space
+      uses: endersonmenezes/free-disk-space@v3
+      with:
+        remove_android: true
+        remove_dotnet: true
+        remove_haskell: true
+        remove_tool_cache: true
+        remove_swap: true
+        remove_packages: >
+          azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable
+          firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*
+        remove_packages_one_command: true
+        remove_folders: >
+          /usr/share/swift /usr/share/miniconda /usr/share/az*
+          /usr/local/lib/node_modules /usr/local/share/chromium
+          /usr/local/share/powershell /usr/local/julia
+          /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle
+        rm_cmd: rmz
+        rmz_version: "3.1.1"
+        testing: false
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y bc bison flex libssl-dev libelf-dev \
-          python3-pip unzip git patch coreutils curl build-essential cpio wget
+    # ── 3. Swap (for LTO) ──────────────────────────────────────────────────────
+    - name: Setup Swap
+      uses: thejerrybao/setup-swap-space@v1
+      with:
+        swap-size-gb: 25
 
+    # ── 4. Dependencies ────────────────────────────────────────────────────────
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          bc bison flex libssl-dev libelf-dev \
+          python3-pip unzip git patch coreutils curl \
+          build-essential cpio wget zip
+
+    # ── 5. Samsung source ──────────────────────────────────────────────────────
     - name: Download and Extract Samsung Source
       run: |
-        pip install gdown
+        pip install -q gdown
         gdown "1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2-" -O samsung.zip
-        unzip samsung.zip
+        unzip -q samsung.zip
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
         rm samsung.zip Kernel.tar.gz Platform.tar.gz
 
+    # ── 6. Patch build target ──────────────────────────────────────────────────
     - name: Patch Build Target
       run: |
         sed -i 's/BUILD_TARGET=q4q_kor_singlex/BUILD_TARGET=q4q_eur_openx/g' \
           build_kernel_GKI.sh
-        grep "BUILD_TARGET" build_kernel_GKI.sh
 
-    - name: Download Clang and GAS
+    # ── 7. Environment variables ───────────────────────────────────────────────
+    - name: Set Environment Variables
       run: |
-        cd kernel_platform
-        mkdir -p prebuilts-master/clang/host/linux-x86/clang-r416183b
-        curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz" -o clang.tar.gz
-        tar -xzf clang.tar.gz -C prebuilts-master/clang/host/linux-x86/clang-r416183b
-        rm clang.tar.gz
-        mkdir -p prebuilts/gas/linux-x86
-        curl -LSs "https://android.googlesource.com/platform/prebuilts/gas/linux-x86/+archive/refs/heads/master.tar.gz" -o gas.tar.gz
-        tar -xzf gas.tar.gz -C prebuilts/gas/linux-x86
-        rm gas.tar.gz
+        echo "COMMON=$GITHUB_WORKSPACE/kernel_platform/common" >> $GITHUB_ENV
+        echo "GKI_DEFCONFIG=$GITHUB_WORKSPACE/kernel_platform/common/arch/arm64/configs/gki_defconfig" >> $GITHUB_ENV
 
-    - name: Setup Host Tools and Sysroot
-      run: |
-        chmod -R u+w kernel_platform/build
-        TOOLS_DIR=$(pwd)/kernel_platform/build/build-tools/path/linux-x86
-        mkdir -p "$TOOLS_DIR"
-        find /usr/bin /bin -maxdepth 1 -type f -executable -exec ln -sf {} "$TOOLS_DIR/" \;
-        rm -f "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-        printf '#!/bin/bash\nexec /usr/bin/gcc -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/gcc"
-        printf '#!/bin/bash\nexec /usr/bin/g++ -I/usr/include -I/usr/include/x86_64-linux-gnu "$@"\n' > "$TOOLS_DIR/g++"
-        chmod +x "$TOOLS_DIR/gcc" "$TOOLS_DIR/g++"
-        KBT=$(pwd)/kernel_platform/prebuilts/kernel-build-tools/linux-x86/lib64
-        mkdir -p "$KBT"
-        cp /usr/lib/x86_64-linux-gnu/crt1.o "$KBT/"
-        cp /usr/lib/x86_64-linux-gnu/crti.o "$KBT/"
-        cp /usr/lib/x86_64-linux-gnu/crtn.o "$KBT/"
-        cp /usr/lib/x86_64-linux-gnu/Scrt1.o "$KBT/" 2>/dev/null || true
-        ln -sf /usr/lib/x86_64-linux-gnu/libc.so.6 "$KBT/libc.so.6"
-        echo "GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a )" > "$KBT/libc.so"
-        ln -sf /usr/lib/x86_64-linux-gnu "$KBT/../lib64"
-        SYSROOT=$(pwd)/kernel_platform/build/build-tools/sysroot
-        rm -rf "$SYSROOT"
-        mkdir -p "$SYSROOT/usr"
-        ln -sf /usr/include "$SYSROOT/usr/include"
-        ln -sf /usr/lib "$SYSROOT/usr/lib"
-        ln -sf /lib "$SYSROOT/lib"
-        ln -sf /lib64 "$SYSROOT/lib64"
-        if [ -f kernel_platform/build/_setup_env.sh ]; then
-          echo 'export PATH=$PATH:/usr/bin:/bin' >> kernel_platform/build/_setup_env.sh
-        fi
-
+    # ── 8. SUSFS kernel patches ────────────────────────────────────────────────
     - name: Setup SUSFS Kernel Patches
       working-directory: kernel_platform/common
       run: |
@@ -95,10 +87,8 @@ jobs:
         cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
         cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || true
 
-        # Pre-process open.c — remove DEFEX blocks so SUSFS hunk applies cleanly
         sed -i '/#ifdef CONFIG_SECURITY_DEFEX/,/^#endif/d' fs/open.c
 
-        # Pre-process namespace.c — remove KDP_NS conditional so SUSFS hunk applies cleanly
         sed -i '/copy_flags = CL_COPY_UNBINDABLE | CL_EXPIRE;/,/#endif/ {
           /#ifdef CONFIG_KDP_NS/,/#endif/ {
              /#else/,/#endif/!d
@@ -107,62 +97,51 @@ jobs:
           }
         }' fs/namespace.c
 
-        # Apply main SUSFS kernel patch
         patch -p1 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch || true
 
-        # Apply wild a12-5.10 supplemental patch for proc/base.c
         curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/wild/susfs_fix_patches/v2.1.0/a12-5.10/base.c.patch" \
           | patch -p1 || true
 
-        # Fix remaining Samsung-specific rejected hunks
         python3 $GITHUB_WORKSPACE/patches/susfs_hunk_fix.py
 
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
 
+    # ── 9. Verify SUSFS kernel patches ─────────────────────────────────────────
     - name: Verify SUSFS Kernel Patches
       working-directory: kernel_platform/common
       run: |
         FAIL=0
         check() {
-          local label="$1"; local file="$2"; local pattern="$3"
-          if grep -q "$pattern" "$file" 2>/dev/null; then
-            echo "✅ $label"
-          else
-            echo "❌ $label — '$pattern' not found in $file"
-            FAIL=1
-          fi
+          local label="$1" file="$2" pattern="$3"
+          grep -q "$pattern" "$file" 2>/dev/null \
+            && echo "✅ $label" \
+            || { echo "❌ $label — '$pattern' not found in $file"; FAIL=1; }
         }
 
-        check "susfs.c exists"             fs/susfs.c                      "susfs"
-        check "susfs.h exists"             include/linux/susfs.h           "susfs"
-        check "susfs_def.h exists"         include/linux/susfs_def.h       "susfs"
-        check "fs/Makefile compiles susfs" fs/Makefile                     "susfs.o"
-        check "exec.c patched"             fs/exec.c                       "susfs_def.h"
-        check "namespace.c SUS_MOUNT"      fs/namespace.c                  "CONFIG_KSU_SUSFS_SUS_MOUNT"
-        check "namespace.c externs"        fs/namespace.c                  "susfs_is_current_ksu_domain"
-        check "namespace.c copy_flags"     fs/namespace.c                  "CL_COPY_MNT_NS"
-        check "open.c patched"             fs/open.c                       "is_inode_open_redirect"
-        check "proc/base.c include"        fs/proc/base.c                  "susfs_def.h"
-        check "proc/base.c SUS_MAP"        fs/proc/base.c                  "AS_FLAGS_SUS_MAP"
-        check "proc/base.c vma declared"   fs/proc/base.c                  "struct vm_area_struct \*vma"
-        check "fdinfo.c patched"           fs/notify/fdinfo.c              "DEFAULT_KSU_MNT_ID"
-        check "hooks.c ksu_selinux ref"    security/selinux/hooks.c        "ksu_selinux_hide_running"
+        check "susfs.c exists"             fs/susfs.c                   "susfs"
+        check "susfs.h exists"             include/linux/susfs.h        "susfs"
+        check "susfs_def.h exists"         include/linux/susfs_def.h    "susfs"
+        check "fs/Makefile compiles susfs" fs/Makefile                  "susfs.o"
+        check "exec.c patched"             fs/exec.c                    "susfs_def.h"
+        check "namespace.c SUS_MOUNT"      fs/namespace.c               "CONFIG_KSU_SUSFS_SUS_MOUNT"
+        check "namespace.c externs"        fs/namespace.c               "susfs_is_current_ksu_domain"
+        check "namespace.c copy_flags"     fs/namespace.c               "CL_COPY_MNT_NS"
+        check "open.c patched"             fs/open.c                    "is_inode_open_redirect"
+        check "proc/base.c include"        fs/proc/base.c               "susfs_def.h"
+        check "proc/base.c SUS_MAP"        fs/proc/base.c               "AS_FLAGS_SUS_MAP"
+        check "proc/base.c vma declared"   fs/proc/base.c               "struct vm_area_struct \*vma"
+        check "fdinfo.c patched"           fs/notify/fdinfo.c           "DEFAULT_KSU_MNT_ID"
+        check "hooks.c ksu_selinux ref"    security/selinux/hooks.c     "ksu_selinux_hide_running"
 
         REJS=$(find . -name "*.rej" 2>/dev/null)
-        if [ -n "$REJS" ]; then
-          echo "❌ Leftover .rej files: $REJS"
-          FAIL=1
-        else
-          echo "✅ No leftover .rej files"
-        fi
+        [ -n "$REJS" ] && { echo "❌ Leftover .rej files: $REJS"; FAIL=1; } \
+                       || echo "✅ No leftover .rej files"
 
-        if [ "$FAIL" -ne 0 ]; then
-          echo "❌ SUSFS kernel patch checks failed — aborting"
-          exit 1
-        fi
+        [ "$FAIL" -ne 0 ] && { echo "❌ SUSFS kernel patch checks failed — aborting"; exit 1; }
         echo "✅ All SUSFS kernel patch checks passed"
 
+    # ── 10. KernelSU-Next + SUSFS driver patches ───────────────────────────────
     - name: Setup KernelSU-Next with SUSFS
       working-directory: kernel_platform/common
       run: |
@@ -170,18 +149,14 @@ jobs:
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
           | bash -s dev
 
-        # Pin to exact commit WildKernels uses
         git -C KernelSU-Next fetch --unshallow 2>/dev/null || true
         git -C KernelSU-Next checkout 551ad80473f60e052917aec08abf5323b6ab2f7c
 
-        # Apply 10_enable_susfs_for_ksu.patch from KernelSU-Next/ with -p1
-        # Many hunks fail (original KSU patch) — fix patches below handle them
         cp /tmp/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU-Next/
         cd KernelSU-Next
         patch -p1 --batch < 10_enable_susfs_for_ksu.patch || true
         rm 10_enable_susfs_for_ksu.patch
 
-        # Apply WildKernels v2.1.0 fix patches from KernelSU-Next/ with -p1
         for p in fix_Kbuild fix_Makefile fix_init.c fix_kernel_umount.c \
                   fix_setuid_hook.c fix_sucompat.c fix_sucompat.h \
                   fix_supercall.c ksu_toolkit overwrite_hook_mode; do
@@ -189,153 +164,147 @@ jobs:
             | patch -p1 --batch || true
         done
 
-        # Run ksun_init_fix.py from drivers/kernelsu (symlink to KernelSU-Next/kernel in CI)
         cd $GITHUB_WORKSPACE/kernel_platform/common/drivers/kernelsu
         python3 $GITHUB_WORKSPACE/patches/ksun_init_fix.py
 
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
 
+    # ── 11. Verify KSU-Next SUSFS integration ──────────────────────────────────
     - name: Verify KernelSU-Next SUSFS Integration
       working-directory: kernel_platform/common/drivers/kernelsu
       run: |
         FAIL=0
         check() {
-          local label="$1"; local file="$2"; local pattern="$3"
-          if grep -q "$pattern" "$file" 2>/dev/null; then
-            echo "✅ $label"
-          else
-            echo "❌ $label — '$pattern' not found in $file"
-            FAIL=1
-          fi
+          local label="$1" file="$2" pattern="$3"
+          grep -q "$pattern" "$file" 2>/dev/null \
+            && echo "✅ $label" \
+            || { echo "❌ $label — '$pattern' not found in $file"; FAIL=1; }
         }
 
-        check "Kconfig has KSU_SUSFS"          Kconfig                          "KSU_SUSFS"
-        check "Kconfig has SUS_MOUNT"          Kconfig                          "KSU_SUSFS_SUS_MOUNT"
-        check "Kconfig has OPEN_REDIRECT"      Kconfig                          "KSU_SUSFS_OPEN_REDIRECT"
-        check "sucompat.c patched"             feature/sucompat.c               "susfs"
-        check "selinux hide defined"           selinux/selinux.c                "ksu_selinux_hide_running"
-        check "fake_state defined"             selinux/selinux.c                "fake_state"
-        check "static keys defined"            runtime/ksud_integration.c       "DEFINE_STATIC_KEY_TRUE"
-        check "su_compat_enabled defined"      feature/sucompat.c               "ksu_su_compat_enabled"
-        check "supercall syscalls.h"           supercall/supercall.c            "linux/syscalls.h"
+        check "Kconfig has KSU_SUSFS"      Kconfig                      "KSU_SUSFS"
+        check "Kconfig has SUS_MOUNT"      Kconfig                      "KSU_SUSFS_SUS_MOUNT"
+        check "Kconfig has OPEN_REDIRECT"  Kconfig                      "KSU_SUSFS_OPEN_REDIRECT"
+        check "sucompat.c patched"         feature/sucompat.c           "susfs"
+        check "selinux hide defined"       selinux/selinux.c            "ksu_selinux_hide_running"
+        check "fake_state defined"         selinux/selinux.c            "fake_state"
+        check "static keys defined"        runtime/ksud_integration.c   "DEFINE_STATIC_KEY_TRUE"
+        check "su_compat_enabled defined"  feature/sucompat.c           "ksu_su_compat_enabled"
+        check "supercall syscalls.h"       supercall/supercall.c        "linux/syscalls.h"
 
         REJS=$(find . -name "*.rej" 2>/dev/null)
-        if [ -n "$REJS" ]; then
-          echo "❌ Leftover .rej files:"
-          echo "$REJS"
-          FAIL=1
-        else
-          echo "✅ No leftover .rej files"
-        fi
+        [ -n "$REJS" ] && { echo "❌ Leftover .rej files:"; echo "$REJS"; FAIL=1; } \
+                       || echo "✅ No leftover .rej files"
 
-        if grep -q "ksu_late_loaded" core/init.c 2>/dev/null; then
-          echo "❌ init.c still has ksu_late_loaded"
-          FAIL=1
-        else
-          echo "✅ init.c clean"
-        fi
+        grep -q "ksu_late_loaded" core/init.c 2>/dev/null \
+          && { echo "❌ init.c still has ksu_late_loaded"; FAIL=1; } \
+          || echo "✅ init.c clean"
 
-        if [ "$FAIL" -ne 0 ]; then
-          echo "❌ KSU-Next SUSFS checks failed — aborting"
-          exit 1
-        fi
+        [ "$FAIL" -ne 0 ] && { echo "❌ KSU-Next SUSFS checks failed — aborting"; exit 1; }
         echo "✅ All KSU-Next SUSFS checks passed"
 
-    - name: Patch Defconfigs
+    # ── 12. Kernel config ──────────────────────────────────────────────────────
+    - name: Set Kernel Config
       run: |
-        STOCK_CONFIG="configs/stock_config.txt"
+        sed -i 's/check_defconfig//' kernel_platform/common/build.config.gki
 
-        printf '%s\n' \
-          'CONFIG_UH=n' \
-          'CONFIG_UH_RKP=n' \
-          'CONFIG_UH_LKMAUTH=n' \
-          'CONFIG_UH_LKM_BLOCK=n' \
-          'CONFIG_RKP_CFP_JOPP=n' \
-          'CONFIG_RKP_CFP=n' \
-          'CONFIG_SECURITY_DEFEX=n' \
-          'CONFIG_PROCA=n' \
-          'CONFIG_FIVE=n' \
-          'CONFIG_RKP=n' \
-          'CONFIG_KDP_NS=n' \
-          'CONFIG_KDP=n' \
-          'CONFIG_OVERLAY_FS=y' \
-          'CONFIG_TMPFS_XATTR=y' \
-          'CONFIG_TMPFS_POSIX_ACL=y' \
-          'CONFIG_KPROBES=y' \
-          'CONFIG_HAVE_KPROBES=y' \
-          'CONFIG_KPROBE_EVENTS=y' \
-          'CONFIG_KSU=y' \
-          'CONFIG_KSU_WITH_KPROBES=n' \
-          'CONFIG_KSU_SUSFS=y' \
-          'CONFIG_KSU_SUSFS_SUS_PATH=y' \
-          'CONFIG_KSU_SUSFS_SUS_MOUNT=y' \
-          'CONFIG_KSU_SUSFS_SUS_KSTAT=y' \
-          'CONFIG_KSU_SUSFS_SUS_MAP=y' \
-          'CONFIG_KSU_SUSFS_TRY_UMOUNT=y' \
-          'CONFIG_KSU_SUSFS_SPOOF_UNAME=y' \
-          'CONFIG_KSU_SUSFS_ENABLE_LOG=y' \
-          'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y' \
-          > /tmp/ksu_overrides.txt
+        cat >> "$GKI_DEFCONFIG" << 'EOF'
+        # Mountify support
+        CONFIG_OVERLAY_FS=y
+        CONFIG_TMPFS_XATTR=y
+        CONFIG_TMPFS_POSIX_ACL=y
+        # Kprobes
+        CONFIG_KPROBES=y
+        CONFIG_HAVE_KPROBES=y
+        CONFIG_KPROBE_EVENTS=y
+        # KernelSU-Next
+        CONFIG_KSU=y
+        CONFIG_KSU_WITH_KPROBES=n
+        # SUSFS
+        CONFIG_KSU_SUSFS=y
+        CONFIG_KSU_SUSFS_SUS_PATH=y
+        CONFIG_KSU_SUSFS_SUS_MOUNT=y
+        CONFIG_KSU_SUSFS_SUS_KSTAT=y
+        CONFIG_KSU_SUSFS_SUS_MAP=y
+        CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+        CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+        CONFIG_KSU_SUSFS_ENABLE_LOG=y
+        CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+        # Disable Samsung security enforcement
+        CONFIG_UH=n
+        CONFIG_UH_RKP=n
+        CONFIG_UH_LKMAUTH=n
+        CONFIG_UH_LKM_BLOCK=n
+        CONFIG_RKP_CFP_JOPP=n
+        CONFIG_RKP_CFP=n
+        CONFIG_SECURITY_DEFEX=n
+        CONFIG_PROCA=n
+        CONFIG_FIVE=n
+        CONFIG_RKP=n
+        CONFIG_KDP_NS=n
+        CONFIG_KDP=n
+        EOF
 
-        find kernel_platform -type f -name "gki_defconfig" | while read -r config; do
-          chmod u+w "$config" 2>/dev/null || true
-          cp "$STOCK_CONFIG" "$config"
-          cat /tmp/ksu_overrides.txt >> "$config"
-          echo "Patched $config with stock base"
-        done
-
-        find kernel_platform -type f \( \
-          -name "*.config" \
-          -o -name "*defconfig*" \
-          -o -name "lego.config" \
-        \) | while read -r config; do
-          chmod u+w "$config" 2>/dev/null || true
-          cat /tmp/ksu_overrides.txt >> "$config"
-          echo "Appended overrides to $config"
-        done
-
-    - name: Build kernel
+    # ── 13. Build ──────────────────────────────────────────────────────────────
+    - name: Build Kernel
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         mkdir -p out/target/product/q4q/
-
-        sed -i 's/TOOL_ARGS+=("LLVM=1")/TOOL_ARGS+=("LLVM=1" "HOSTCC=gcc" "HOSTCXX=g++" "HOSTCFLAGS=-I\/usr\/include -I\/usr\/include\/x86_64-linux-gnu -Wno-unused-result" "HOSTLDFLAGS=-L\/usr\/lib\/x86_64-linux-gnu")/' \
-          kernel_platform/build/build.sh
-
         export LTO=thin
         bash build_kernel_GKI.sh || true
 
-    - name: Upload Image to GoFile
+    # ── 14. Package and upload (only if Image exists) ──────────────────────────
+    - name: Package Artifacts
+      id: package
       run: |
-        IMAGE=$(find out/msm-waipio-waipio-gki -name "Image" -not -name "*.lz4" 2>/dev/null | head -n 1)
-        IMAGE_LZ4=$(find out/msm-waipio-waipio-gki -name "Image.lz4" 2>/dev/null | head -n 1)
+        OUT_DIR=$(find out -type d -name "msm-waipio-waipio-gki" 2>/dev/null | head -n1)
 
-        if [ ! -f "$IMAGE" ]; then
-          echo "❌ Image not found"
-          find out/ -name "Image" 2>/dev/null || true
+        if [ ! -f "$OUT_DIR/Image" ]; then
+          echo "❌ Image not found — skipping upload"
           exit 1
         fi
 
-        echo "✅ Image: $(du -h "$IMAGE")"
-        mkdir -p artifacts
-        cp "$IMAGE" artifacts/Image
-        [ -f "$IMAGE_LZ4" ] && cp "$IMAGE_LZ4" artifacts/Image.lz4
+        ZIP="Fold4-KSUNext-SUSFS.zip"
+        find "$OUT_DIR" \( \
+          -name "Image"            \
+          -o -name "Image.lz4"    \
+          -o -name "*.dtb"        \
+          -o -name "*.dtbo"       \
+          -o -name "boot.img"     \
+          -o -name "boot-gz.img"  \
+          -o -name "boot-lz4.img" \
+          -o -name "vendor_dlkm.img" \
+        \) -not -empty 2>/dev/null | sort | zip -j "$ZIP" -@
 
+        echo "📦 Archive:"
+        unzip -l "$ZIP"
+
+    - name: Upload to GoFile
+      if: steps.package.outcome == 'success'
+      run: |
         SERVER=$(curl -s https://api.gofile.io/servers | \
           python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
-
-        RESP=$(curl -s -F "file=@artifacts/Image" "https://$SERVER.gofile.io/uploadFile")
-        echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-
-        if [ -f artifacts/Image.lz4 ]; then
-          RESP=$(curl -s -F "file=@artifacts/Image.lz4" "https://$SERVER.gofile.io/uploadFile")
-          echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-        fi
+        RESP=$(curl -s -F "file=@Fold4-KSUNext-SUSFS.zip" "https://$SERVER.gofile.io/uploadFile")
+        echo "✅ GoFile → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
 
     - name: Upload to GitHub Artifacts
+      if: steps.package.outcome == 'success'
       uses: actions/upload-artifact@v4
       with:
         name: Fold4-KSUNext-SUSFS
-        path: artifacts/
+        path: Fold4-KSUNext-SUSFS.zip
+        compression-level: 0
+
+    # ── 15. Scan patch rejects (always) ────────────────────────────────────────
+    - name: Scan Patch Rejects
+      if: always()
+      run: |
+        REJECTS=$(find kernel_platform -name "*.rej" 2>/dev/null)
+        if [ -n "$REJECTS" ]; then
+          echo "⚠️ Rejected hunks:"
+          echo "$REJECTS"
+        else
+          echo "✅ No rejected patches"
+        fi
+
