@@ -267,7 +267,6 @@ jobs:
       run: |
         OUT_DIR="out/msm-waipio-waipio-gki"
 
-        # GKI Image lives in gki_kernel/dist/ — that's what we flash
         GKI_DIST="$OUT_DIR/gki_kernel/dist"
         DIST="$OUT_DIR/dist"
 
@@ -287,7 +286,7 @@ jobs:
           -o -name "boot-gz.img"  \
           -o -name "boot-lz4.img" \
           -o -name "vendor_dlkm.img" \
-        \) -not -empty 2>/dev/null | sort | zip -j "$ZIP" -@
+        \) -not -empty 2>/dev/null | sort | zip "$ZIP" -@
 
         echo "📦 Archive:"
         unzip -l "$ZIP"
