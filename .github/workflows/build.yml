@@ -58,7 +58,7 @@ jobs:
     - name: Download and Extract Samsung Source
       run: |
         pip install -q gdown
-        gdown "1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2-" -O samsung.zip
+        gdown "1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M" -O samsung.zip
         gdown "1z4U2GRukJ5xNRyvKaYj7XLkzdWbG0qnX" -O toolchain.tar.gz
         unzip -q samsung.zip
         tar -xf Kernel.tar.gz
@@ -262,19 +262,24 @@ jobs:
     - name: Package Artifacts
       id: package
       run: |
-        OUT_DIR=$(find out -type d -name "msm-waipio-waipio-gki" 2>/dev/null | head -n1)
+        OUT_DIR="out/msm-waipio-waipio-gki"
 
-        if [ ! -f "$OUT_DIR/Image" ]; then
-          echo "❌ Image not found — build likely failed"
+        # GKI Image lives in gki_kernel/dist/ — that's what we flash
+        GKI_DIST="$OUT_DIR/gki_kernel/dist"
+        DIST="$OUT_DIR/dist"
+
+        if [ ! -f "$GKI_DIST/Image" ]; then
+          echo "❌ Image not found — build failed"
           exit 1
         fi
 
         ZIP="Fold4-KSUNext-SUSFS.zip"
-        find "$OUT_DIR" \( \
+        find "$GKI_DIST" "$DIST" \( \
           -name "Image"            \
           -o -name "Image.lz4"    \
           -o -name "*.dtb"        \
           -o -name "*.dtbo"       \
+          -o -name "dtbo.img"     \
           -o -name "boot.img"     \
           -o -name "boot-gz.img"  \
           -o -name "boot-lz4.img" \
