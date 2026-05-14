@@ -58,7 +58,7 @@ jobs:
     - name: Download and Extract Samsung Source
       run: |
         pip install -q gdown
-        gdown "1TjP4Sr-yJuZ4sZ69Fo1KWNh_sVn_jN2M" -O samsung.zip
+        gdown "1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2-" -O samsung.zip
         gdown "1z4U2GRukJ5xNRyvKaYj7XLkzdWbG0qnX" -O toolchain.tar.gz
         unzip -q samsung.zip
         tar -xf Kernel.tar.gz
