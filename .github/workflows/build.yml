@@ -288,6 +288,9 @@ jobs:
           | patch -p1 || true
         curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_compat_android12-5.10.patch" \
           | patch -p1 || true
+        python3 $GITHUB_WORKSPACE/patches/ntsync_lockdep_fix.py
+        find . -name "*.rej" -delete
+        find . -name "*.orig" -delete
 
         cat >> "$GKI_DEFCONFIG" << 'EOF'
         # ntsync
