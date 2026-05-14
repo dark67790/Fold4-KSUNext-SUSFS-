@@ -345,14 +345,36 @@ jobs:
           ${{ steps.package.outputs.image_lz4 }}
         compression-level: 0
 
-    # ── 17. Scan patch rejects (always) ────────────────────────────────────────
-    - name: Scan Patch Rejects
+    # ── 17. Collect and upload patch rejects (always) ──────────────────────────
+    - name: Collect Patch Rejects
       if: always()
       run: |
-        REJECTS=$(find kernel_platform -name "*.rej" 2>/dev/null)
-        if [ -n "$REJECTS" ]; then
-          echo "⚠️ Rejected hunks:"
-          echo "$REJECTS"
-        else
+        REJECTS_DIR="$GITHUB_WORKSPACE/patch-rejects"
+        mkdir -p "$REJECTS_DIR"
+
+        mapfile -t REJS < <(find kernel_platform -name "*.rej" 2>/dev/null)
+
+        if [ ${#REJS[@]} -eq 0 ]; then
           echo "✅ No rejected patches"
+          exit 0
         fi
+
+        echo "⚠️ Collecting ${#REJS[@]} reject file(s):"
+        for REJ in "${REJS[@]}"; do
+          echo "  $REJ"
+          REL="${REJ#kernel_platform/}"
+          DEST="$REJECTS_DIR/$REL"
+          mkdir -p "$(dirname "$DEST")"
+          cp "$REJ" "$DEST"
+          # also grab the original file for context
+          ORIG="${REJ%.rej}"
+          [ -f "$ORIG" ] && cp "$ORIG" "$REJECTS_DIR/${REL%.rej}"
+        done
+
+    - name: Upload Patch Rejects
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: patch-rejects
+        path: patch-rejects/
+        if-no-files-found: ignore
