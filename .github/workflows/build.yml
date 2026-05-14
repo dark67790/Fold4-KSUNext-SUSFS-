@@ -83,9 +83,6 @@ jobs:
     - name: Setup SUSFS Kernel Patches
       working-directory: kernel_platform/common
       run: |
-        # Fix read‑only files from Samsung’s archive
-        chmod -R u+w .
-
         git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git \
           -b gki-android12-5.10 /tmp/susfs4ksu
 
@@ -261,50 +258,45 @@ jobs:
         export KBUILD_MODPOST_WARN=1
         bash build_kernel_GKI.sh || true
 
-    # ── 14. Package and upload (only if Image exists) ──────────────────────────
-    - name: Package Artifacts
+    # ── 14. Grab and upload Image (always runs) ────────────────────────────────
+    - name: Grab Kernel Image
+      if: always()
       id: package
       run: |
-        OUT_DIR="out/msm-waipio-waipio-gki"
+        GKI_DIST="out/msm-waipio-waipio-gki/gki_kernel/dist"
+        IMAGE="$GKI_DIST/Image"
+        IMAGE_LZ4="$GKI_DIST/Image.lz4"
 
-        GKI_DIST="$OUT_DIR/gki_kernel/dist"
-        DIST="$OUT_DIR/dist"
-
-        if [ ! -f "$GKI_DIST/Image" ]; then
-          echo "❌ Image not found — build failed"
+        if [ ! -f "$IMAGE" ]; then
+          echo "❌ Image not found — GKI build failed"
           exit 1
         fi
 
-        ZIP="Fold4-KSUNext-SUSFS.zip"
-        find "$GKI_DIST" "$DIST" \( \
-          -name "Image"            \
-          -o -name "Image.lz4"    \
-          -o -name "*.dtb"        \
-          -o -name "*.dtbo"       \
-          -o -name "dtbo.img"     \
-          -o -name "boot.img"     \
-          -o -name "boot-gz.img"  \
-          -o -name "boot-lz4.img" \
-          -o -name "vendor_dlkm.img" \
-        \) -not -empty 2>/dev/null | sort | zip "$ZIP" -@
-
-        echo "📦 Archive:"
-        unzip -l "$ZIP"
+        echo "✅ Image: $(du -h $IMAGE | cut -f1)"
+        [ -f "$IMAGE_LZ4" ] && echo "✅ Image.lz4: $(du -h $IMAGE_LZ4 | cut -f1)"
+        echo "image=$IMAGE" >> $GITHUB_OUTPUT
+        echo "image_lz4=$IMAGE_LZ4" >> $GITHUB_OUTPUT
 
     - name: Upload to GoFile
-      if: steps.package.outcome == 'success'
+      if: always() && steps.package.outcome == 'success'
       run: |
         SERVER=$(curl -s https://api.gofile.io/servers | \
           python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
-        RESP=$(curl -s -F "file=@Fold4-KSUNext-SUSFS.zip" "https://$SERVER.gofile.io/uploadFile")
-        echo "✅ GoFile → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+        RESP=$(curl -s -F "file=@${{ steps.package.outputs.image }}" "https://$SERVER.gofile.io/uploadFile")
+        echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+        if [ -f "${{ steps.package.outputs.image_lz4 }}" ]; then
+          RESP=$(curl -s -F "file=@${{ steps.package.outputs.image_lz4 }}" "https://$SERVER.gofile.io/uploadFile")
+          echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+        fi
 
     - name: Upload to GitHub Artifacts
-      if: steps.package.outcome == 'success'
+      if: always() && steps.package.outcome == 'success'
       uses: actions/upload-artifact@v4
       with:
         name: Fold4-KSUNext-SUSFS
-        path: Fold4-KSUNext-SUSFS.zip
+        path: |
+          ${{ steps.package.outputs.image }}
+          ${{ steps.package.outputs.image_lz4 }}
         compression-level: 0
 
     # ── 15. Scan patch rejects (always) ────────────────────────────────────────
