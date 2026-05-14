@@ -78,6 +78,7 @@ jobs:
       run: |
         echo "COMMON=$GITHUB_WORKSPACE/kernel_platform/common" >> $GITHUB_ENV
         echo "GKI_DEFCONFIG=$GITHUB_WORKSPACE/kernel_platform/common/arch/arm64/configs/gki_defconfig" >> $GITHUB_ENV
+        echo "KERNEL_PATCHES=https://raw.githubusercontent.com/WildKernels/kernel_patches/main" >> $GITHUB_ENV
 
     # ── 8. SUSFS kernel patches ────────────────────────────────────────────────
     - name: Setup SUSFS Kernel Patches
@@ -248,7 +249,52 @@ jobs:
         CONFIG_KDP=n
         EOF
 
-    # ── 13. Build ──────────────────────────────────────────────────────────────
+    # ── 13. Droidspaces patches + config ───────────────────────────────────────
+    - name: Apply Droidspaces Support
+      working-directory: kernel_platform/common
+      run: |
+        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/droidspaces/fix_sysvipc_kabi_6_7_8.patch" \
+          | patch -p1 || true
+        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/droidspaces/fix_abi_padding_for_posix_mqueue.patch" \
+          | patch -p1 || true
+
+        cat >> "$GKI_DEFCONFIG" << 'EOF'
+        # Droidspaces — IPC
+        CONFIG_SYSVIPC=y
+        CONFIG_POSIX_MQUEUE=y
+        # Droidspaces — Namespaces
+        CONFIG_IPC_NS=y
+        CONFIG_PID_NS=y
+        # Droidspaces — HW access
+        CONFIG_DEVTMPFS=y
+        # Droidspaces — Docker NAT (optional)
+        CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+        # Droidspaces — UFW (optional)
+        CONFIG_NETFILTER_XT_TARGET_REJECT=y
+        CONFIG_NETFILTER_XT_TARGET_LOG=y
+        CONFIG_NETFILTER_XT_MATCH_RECENT=y
+        # Droidspaces — Fail2Ban (optional)
+        CONFIG_IP_SET=y
+        CONFIG_IP_SET_HASH_IP=y
+        CONFIG_IP_SET_HASH_NET=y
+        CONFIG_NETFILTER_XT_SET=y
+        EOF
+
+    # ── 14. ntsync patches + config ────────────────────────────────────────────
+    - name: Apply ntsync Support
+      working-directory: kernel_platform/common
+      run: |
+        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_base.patch" \
+          | patch -p1 || true
+        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_compat_android12-5.10.patch" \
+          | patch -p1 || true
+
+        cat >> "$GKI_DEFCONFIG" << 'EOF'
+        # ntsync
+        CONFIG_NTSYNC=y
+        EOF
+
+    # ── 15. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
@@ -258,7 +304,7 @@ jobs:
         export KBUILD_MODPOST_WARN=1
         bash build_kernel_GKI.sh || true
 
-    # ── 14. Grab and upload Image (always runs) ────────────────────────────────
+    # ── 16. Grab and upload Image (always runs) ────────────────────────────────
     - name: Grab Kernel Image
       if: always()
       id: package
@@ -299,7 +345,7 @@ jobs:
           ${{ steps.package.outputs.image_lz4 }}
         compression-level: 0
 
-    # ── 15. Scan patch rejects (always) ────────────────────────────────────────
+    # ── 17. Scan patch rejects (always) ────────────────────────────────────────
     - name: Scan Patch Rejects
       if: always()
       run: |
