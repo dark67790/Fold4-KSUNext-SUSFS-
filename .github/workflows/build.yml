@@ -78,7 +78,6 @@ jobs:
       run: |
         echo "COMMON=$GITHUB_WORKSPACE/kernel_platform/common" >> $GITHUB_ENV
         echo "GKI_DEFCONFIG=$GITHUB_WORKSPACE/kernel_platform/common/arch/arm64/configs/gki_defconfig" >> $GITHUB_ENV
-        echo "KERNEL_PATCHES=https://raw.githubusercontent.com/WildKernels/kernel_patches/main" >> $GITHUB_ENV
 
     # ── 8. SUSFS kernel patches ────────────────────────────────────────────────
     - name: Setup SUSFS Kernel Patches
@@ -249,7 +248,32 @@ jobs:
         CONFIG_KDP=n
         EOF
 
-    # ── 13. Droidspaces patches + config ───────────────────────────────────────
+    # ── 13. BBG ────────────────────────────────────────────────────────────────
+    - name: Add Baseband Guard
+      working-directory: kernel_platform/common
+      run: |
+        curl -LSs https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
+
+        cat >> "$GKI_DEFCONFIG" << 'EOF'
+        # Baseband Guard
+        CONFIG_BBG=y
+        EOF
+
+        sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' \
+          security/Kconfig
+
+        sed -i '/^CONFIG_LSM=/ s/"$/,baseband_guard"/' "$GKI_DEFCONFIG"
+
+    # ── 14. Unicode fix ────────────────────────────────────────────────────────
+    - name: Apply Unicode Fix
+      working-directory: kernel_platform/common
+      run: |
+        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/unicode_bypass_fix_6.1-.patch" \
+          | patch -p1 || true
+        find . -name "*.rej" -delete
+        find . -name "*.orig" -delete
+
+    # ── 15. Droidspaces ────────────────────────────────────────────────────────
     - name: Apply Droidspaces Support
       working-directory: kernel_platform/common
       run: |
@@ -265,8 +289,6 @@ jobs:
         # Droidspaces — Namespaces
         CONFIG_IPC_NS=y
         CONFIG_PID_NS=y
-        # Droidspaces — HW access
-        CONFIG_DEVTMPFS=y
         # Droidspaces — Docker NAT (optional)
         CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
         # Droidspaces — UFW (optional)
@@ -280,7 +302,10 @@ jobs:
         CONFIG_NETFILTER_XT_SET=y
         EOF
 
-    # ── 14. ntsync patches + config ────────────────────────────────────────────
+        find . -name "*.rej" -delete
+        find . -name "*.orig" -delete
+
+    # ── 16. ntsync ─────────────────────────────────────────────────────────────
     - name: Apply ntsync Support
       working-directory: kernel_platform/common
       run: |
@@ -297,7 +322,7 @@ jobs:
         CONFIG_NTSYNC=y
         EOF
 
-    # ── 15. Build ──────────────────────────────────────────────────────────────
+    # ── 17. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
@@ -307,7 +332,7 @@ jobs:
         export KBUILD_MODPOST_WARN=1
         bash build_kernel_GKI.sh || true
 
-    # ── 16. Grab and upload Image (always runs) ────────────────────────────────
+    # ── 18. Grab and upload Image (always runs) ────────────────────────────────
     - name: Grab Kernel Image
       if: always()
       id: package
@@ -348,7 +373,7 @@ jobs:
           ${{ steps.package.outputs.image_lz4 }}
         compression-level: 0
 
-    # ── 17. Collect and upload patch rejects (always) ──────────────────────────
+    # ── 19. Collect patch rejects (always) ─────────────────────────────────────
     - name: Collect Patch Rejects
       if: always()
       run: |
@@ -369,7 +394,6 @@ jobs:
           DEST="$REJECTS_DIR/$REL"
           mkdir -p "$(dirname "$DEST")"
           cp "$REJ" "$DEST"
-          # also grab the original file for context
           ORIG="${REJ%.rej}"
           [ -f "$ORIG" ] && cp "$ORIG" "$REJECTS_DIR/${REL%.rej}"
         done
