@@ -224,7 +224,6 @@ jobs:
         CONFIG_KSU=y
         CONFIG_KSU_WITH_KPROBES=n
         # SUSFS
-        # SUSFS
         CONFIG_KSU_SUSFS=y
         CONFIG_KSU_SUSFS_SUS_PATH=y
         CONFIG_KSU_SUSFS_SUS_MOUNT=y
@@ -292,6 +291,8 @@ jobs:
         # Droidspaces — Namespaces
         CONFIG_IPC_NS=y
         CONFIG_PID_NS=y
+        # Droidspaces — HW access
+        CONFIG_DEVTMPFS=y
         # Droidspaces — Docker NAT (optional)
         CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
         # Droidspaces — UFW (optional)
@@ -308,24 +309,7 @@ jobs:
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
 
-    # ── 16. ntsync ─────────────────────────────────────────────────────────────
-    - name: Apply ntsync Support
-      working-directory: kernel_platform/common
-      run: |
-        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_base.patch" \
-          | patch -p1 || true
-        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_compat_android12-5.10.patch" \
-          | patch -p1 || true
-        python3 $GITHUB_WORKSPACE/patches/ntsync_lockdep_fix.py
-        find . -name "*.rej" -delete
-        find . -name "*.orig" -delete
-
-        cat >> "$GKI_DEFCONFIG" << 'EOF'
-        # ntsync
-        CONFIG_NTSYNC=y
-        EOF
-
-    # ── 17. Build ──────────────────────────────────────────────────────────────
+    # ── 16. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
@@ -335,7 +319,7 @@ jobs:
         export KBUILD_MODPOST_WARN=1
         bash build_kernel_GKI.sh || true
 
-    # ── 18. Grab and upload Image (always runs) ────────────────────────────────
+    # ── 17. Grab and upload Image (always runs) ────────────────────────────────
     - name: Grab Kernel Image
       if: always()
       id: package
@@ -376,7 +360,7 @@ jobs:
           ${{ steps.package.outputs.image_lz4 }}
         compression-level: 0
 
-    # ── 19. Collect patch rejects (always) ─────────────────────────────────────
+    # ── 18. Collect patch rejects (always) ─────────────────────────────────────
     - name: Collect Patch Rejects
       if: always()
       run: |
