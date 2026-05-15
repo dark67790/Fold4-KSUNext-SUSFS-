@@ -275,39 +275,22 @@ jobs:
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
 
-    # ── 15. Droidspaces ────────────────────────────────────────────────────────
-    - name: Apply Droidspaces Support
+    # ── 15. ntsync ─────────────────────────────────────────────────────────────
+    - name: Apply ntsync Support
       working-directory: kernel_platform/common
       run: |
-        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/droidspaces/fix_sysvipc_kabi_6_7_8.patch" \
+        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_base.patch" \
           | patch -p1 || true
-        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/droidspaces/fix_abi_padding_for_posix_mqueue.patch" \
+        curl -sL "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_compat_android12-5.10.patch" \
           | patch -p1 || true
-
-        cat >> "$GKI_DEFCONFIG" << 'EOF'
-        # Droidspaces — IPC
-        CONFIG_SYSVIPC=y
-        CONFIG_POSIX_MQUEUE=y
-        # Droidspaces — Namespaces
-        CONFIG_IPC_NS=y
-        CONFIG_PID_NS=y
-        # Droidspaces — HW access
-        CONFIG_DEVTMPFS=y
-        # Droidspaces — Docker NAT (optional)
-        CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
-        # Droidspaces — UFW (optional)
-        CONFIG_NETFILTER_XT_TARGET_REJECT=y
-        CONFIG_NETFILTER_XT_TARGET_LOG=y
-        CONFIG_NETFILTER_XT_MATCH_RECENT=y
-        # Droidspaces — Fail2Ban (optional)
-        CONFIG_IP_SET=y
-        CONFIG_IP_SET_HASH_IP=y
-        CONFIG_IP_SET_HASH_NET=y
-        CONFIG_NETFILTER_XT_SET=y
-        EOF
-
+        python3 $GITHUB_WORKSPACE/patches/ntsync_lockdep_fix.py
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
+
+        cat >> "$GKI_DEFCONFIG" << 'EOF'
+        # ntsync
+        CONFIG_NTSYNC=y
+        EOF
 
     # ── 16. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
