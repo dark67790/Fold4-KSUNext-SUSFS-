@@ -41,9 +41,12 @@ jobs:
 
     # ── 3. Swap ────────────────────────────────────────────────────────────────
     - name: Setup Swap
-      uses: thejerrybao/setup-swap-space@v1
-      with:
-        swap-size-gb: 12
+      run: |
+        sudo fallocate -l 12G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        free -h
 
     # ── 4. Dependencies ────────────────────────────────────────────────────────
     - name: Install Dependencies
