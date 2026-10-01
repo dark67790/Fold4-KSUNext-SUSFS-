@@ -382,6 +382,24 @@ jobs:
     - name: Suppress Internal Problem Popup (Spoof VINTF Configs)
       working-directory: kernel_platform/common
       run: |
+        # 1. Create helper script that streams the full 4,500+ line .config while masking SYSVIPC
+        cat > scripts/spoof_vintf_config.py << 'EOF'
+        import sys
+
+        if len(sys.argv) < 2:
+            sys.exit(1)
+
+        with open(sys.argv[1], "r", errors="ignore") as f:
+            for line in f:
+                if line.startswith("CONFIG_SYSVIPC="):
+                    sys.stdout.write("# CONFIG_SYSVIPC is not set\n")
+                elif line.startswith("CONFIG_SYSVIPC_"):
+                    continue
+                else:
+                    sys.stdout.write(line)
+        EOF
+
+        # 2. Hook kernel/Makefile to pipe through our helper script into gzip
         python3 -c '
         with open("kernel/Makefile", "r", errors="ignore") as f:
             content = f.read()
@@ -393,7 +411,7 @@ jobs:
         content = content.replace("if_changed,gzip", "if_changed,ikcfg_gz")
 
         hook_defs = """quiet_cmd_ikcfg_gz = GZIP    $@
-              cmd_ikcfg_gz = sed -e "s/^CONFIG_SYSVIPC=y/# CONFIG_SYSVIPC is not set/" -e "/^CONFIG_SYSVIPC_/d" $< | gzip -n -f -9 > $@
+              cmd_ikcfg_gz = python3 $(srctree)/scripts/spoof_vintf_config.py $< | gzip -n -f -9 > $@
 
         targets += config_data.gz"""
 
@@ -402,7 +420,7 @@ jobs:
         with open("kernel/Makefile", "w") as f:
             f.write(content)
 
-        print("✅ Successfully patched kernel/Makefile with full .config filter")
+        print("✅ Successfully hooked kernel/Makefile using helper script")
         '
 
         echo "=== Verifying kernel/Makefile patch ==="
