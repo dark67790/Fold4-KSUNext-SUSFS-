@@ -382,43 +382,31 @@ jobs:
     - name: Suppress Internal Problem Popup (Spoof VINTF Configs)
       working-directory: kernel_platform/common
       run: |
-        # 1. Create stock_defconfig with SYSVIPC disabled for /proc/config.gz spoofing
-        cp arch/arm64/configs/gki_defconfig arch/arm64/configs/stock_defconfig
-        sed -i 's/^CONFIG_SYSVIPC=y/# CONFIG_SYSVIPC is not set/' arch/arm64/configs/stock_defconfig
-        sed -i '/^CONFIG_SYSVIPC_/d' arch/arm64/configs/stock_defconfig
-
-        # 2. Point kernel/Makefile to stock_defconfig when generating config_data.gz
         python3 -c '
         with open("kernel/Makefile", "r", errors="ignore") as f:
-            lines = f.readlines()
+            content = f.read()
 
-        replaced = False
-        new_lines = []
-        for line in lines:
-            if "$(KCONFIG_CONFIG)" in line:
-                new_lines.append(line.replace("$(KCONFIG_CONFIG)", "$(srctree)/arch/arm64/configs/stock_defconfig"))
-                replaced = True
-            elif "config_data.gz:" in line:
-                parts = line.split(":")
-                new_lines.append(f"{parts[0]}: $(srctree)/arch/arm64/configs/stock_defconfig FORCE\n")
-                replaced = True
-            else:
-                new_lines.append(line)
-
-        if not replaced:
-            print("❌ Target rule not found in kernel/Makefile!")
+        if "if_changed,gzip" not in content:
+            print("❌ Target if_changed,gzip not found in kernel/Makefile")
             exit(1)
 
-        with open("kernel/Makefile", "w") as f:
-            f.writelines(new_lines)
+        content = content.replace("if_changed,gzip", "if_changed,ikcfg_gz")
 
-        print("✅ Successfully hooked kernel/Makefile to use stock_defconfig")
+        hook_defs = """quiet_cmd_ikcfg_gz = GZIP    $@
+              cmd_ikcfg_gz = sed -e "s/^CONFIG_SYSVIPC=y/# CONFIG_SYSVIPC is not set/" -e "/^CONFIG_SYSVIPC_/d" $< | gzip -n -f -9 > $@
+
+        targets += config_data.gz"""
+
+        content = content.replace("targets += config_data.gz", hook_defs)
+
+        with open("kernel/Makefile", "w") as f:
+            f.write(content)
+
+        print("✅ Successfully patched kernel/Makefile with full .config filter")
         '
 
         echo "=== Verifying kernel/Makefile patch ==="
-        grep -C 3 "stock_defconfig" kernel/Makefile || { echo "❌ Failed to verify kernel/Makefile hook"; exit 1; }
-        echo "=== Verifying stock_defconfig ==="
-        grep "CONFIG_SYSVIPC" arch/arm64/configs/stock_defconfig
+        grep -C 5 "ikcfg_gz" kernel/Makefile || { echo "❌ Verification failed"; exit 1; }
 
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
