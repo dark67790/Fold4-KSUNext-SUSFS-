@@ -1,3 +1,4 @@
+
 name: Build Fold4 Kernel (KSU-Next + SUSFS) — Personal
 
 permissions:
@@ -382,17 +383,35 @@ jobs:
     - name: Suppress Internal Problem Popup (Spoof VINTF Configs)
       working-directory: kernel_platform/common
       run: |
-        # Strip CONFIG_SYSVIPC=y when generating /proc/config.gz archive (kernel/config_data.gz)
-        # This keeps SYSVIPC compiled and working while hiding it from Android VINTF check.
-        if grep -q "cat \$< | gzip" kernel/Makefile; then
-          sed -i 's|cat \$< | gzip|grep -v "^CONFIG_SYSVIPC=y" \$< | gzip|g' kernel/Makefile
-          echo "✅ Applied VINTF config spoof to kernel/Makefile"
-        elif grep -q "gzip -n -f -9" kernel/Makefile; then
-          sed -i 's|kernel/config_data \$<|kernel/config_data <(grep -v "^CONFIG_SYSVIPC=y" \$<)|g' kernel/Makefile || true
-        else
-          # Fallback generic replacement across kernel/Makefile
-          sed -i 's/\$(CONFIG_SHELL) \$(srctree)\/scripts\/extract-ikconfig/\$(CONFIG_SHELL) \$(srctree)\/scripts\/extract-ikconfig | grep -v "^CONFIG_SYSVIPC=y"/' kernel/Makefile 2>/dev/null || true
-        fi
+        # Strip all CONFIG_SYSVIPC entries when generating config_data.gz and replace with "# CONFIG_SYSVIPC is not set"
+        python3 -c '
+        import re
+
+        with open("kernel/Makefile", "r") as f:
+            data = f.read()
+
+        pattern = r"\$\(obj\)/config_data\.gz:\s*\$\(KCONFIG_CONFIG\)\s*FORCE\n\s*\$\(call if_changed,gzip\)"
+
+        hook = """quiet_cmd_ikcfg_gz = GZIP    $@
+              cmd_ikcfg_gz = (grep -v "^CONFIG_SYSVIPC" $< || true; echo "# CONFIG_SYSVIPC is not set") | gzip -n -f -9 > $@
+
+        $(obj)/config_data.gz: $(KCONFIG_CONFIG) FORCE
+        \t$(call if_changed,ikcfg_gz)"""
+
+        new_data, count = re.subn(pattern, hook, data)
+
+        if count == 0:
+            print("❌ Target rule not found in kernel/Makefile")
+            exit(1)
+
+        with open("kernel/Makefile", "w") as f:
+            f.write(new_data)
+
+        print(f"✅ Successfully patched kernel/Makefile ({count} match replaced)")
+        '
+
+        echo "=== Verifying kernel/Makefile patch ==="
+        grep -C 5 "ikcfg_gz" kernel/Makefile || { echo "❌ Verification failed"; exit 1; }
 
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
