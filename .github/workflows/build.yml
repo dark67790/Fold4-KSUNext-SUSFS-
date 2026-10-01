@@ -59,10 +59,26 @@ jobs:
 
     # ── 5. Samsung source + toolchain ──────────────────────────────────────────
     - name: Download and Extract Samsung Source
+      env:
+        SRC_ID: "1bdcORqw9c05eGFMFo6nCrfgwcHXDiMN7"   # copy of SM-F936N_KOR_14_Opensource.zip
+        TC_ID: "1alFYynwVbV5YH6DZf30jmi0tHSZ2EmPw"    # copy of toolchain.tar.gz
       run: |
-        pip install -q gdown
-        gdown "1oIrEQQJuHD8fOWQGEmvFLf1sVCmaZg2-" -O samsung.zip
-        gdown "1z4U2GRukJ5xNRyvKaYj7XLkzdWbG0qnX" -O toolchain.tar.gz
+        pip install -q -U gdown
+
+        dl() {
+          local id="$1" out="$2"
+          for i in 1 2 3; do
+            gdown "$id" -O "$out" && return 0
+            echo "⚠️ gdown attempt $i failed for $out, retrying in 60s..."
+            sleep 60
+          done
+          echo "❌ Failed to download $out after 3 attempts"
+          return 1
+        }
+
+        dl "$SRC_ID" samsung.zip
+        dl "$TC_ID" toolchain.tar.gz
+
         unzip -q samsung.zip
         tar -xf Kernel.tar.gz
         tar -xf Platform.tar.gz
