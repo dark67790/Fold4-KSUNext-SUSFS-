@@ -1,4 +1,3 @@
-
 name: Build Fold4 Kernel (KSU-Next + SUSFS) — Personal
 
 permissions:
@@ -383,35 +382,43 @@ jobs:
     - name: Suppress Internal Problem Popup (Spoof VINTF Configs)
       working-directory: kernel_platform/common
       run: |
-        # Strip all CONFIG_SYSVIPC entries when generating config_data.gz and replace with "# CONFIG_SYSVIPC is not set"
+        # 1. Create stock_defconfig with SYSVIPC disabled for /proc/config.gz spoofing
+        cp arch/arm64/configs/gki_defconfig arch/arm64/configs/stock_defconfig
+        sed -i 's/^CONFIG_SYSVIPC=y/# CONFIG_SYSVIPC is not set/' arch/arm64/configs/stock_defconfig
+        sed -i '/^CONFIG_SYSVIPC_/d' arch/arm64/configs/stock_defconfig
+
+        # 2. Point kernel/Makefile to stock_defconfig when generating config_data.gz
         python3 -c '
-        import re
+        with open("kernel/Makefile", "r", errors="ignore") as f:
+            lines = f.readlines()
 
-        with open("kernel/Makefile", "r") as f:
-            data = f.read()
+        replaced = False
+        new_lines = []
+        for line in lines:
+            if "$(KCONFIG_CONFIG)" in line:
+                new_lines.append(line.replace("$(KCONFIG_CONFIG)", "$(srctree)/arch/arm64/configs/stock_defconfig"))
+                replaced = True
+            elif "config_data.gz:" in line:
+                parts = line.split(":")
+                new_lines.append(f"{parts[0]}: $(srctree)/arch/arm64/configs/stock_defconfig FORCE\n")
+                replaced = True
+            else:
+                new_lines.append(line)
 
-        pattern = r"\$\(obj\)/config_data\.gz:\s*\$\(KCONFIG_CONFIG\)\s*FORCE\n\s*\$\(call if_changed,gzip\)"
-
-        hook = """quiet_cmd_ikcfg_gz = GZIP    $@
-              cmd_ikcfg_gz = (grep -v "^CONFIG_SYSVIPC" $< || true; echo "# CONFIG_SYSVIPC is not set") | gzip -n -f -9 > $@
-
-        $(obj)/config_data.gz: $(KCONFIG_CONFIG) FORCE
-        \t$(call if_changed,ikcfg_gz)"""
-
-        new_data, count = re.subn(pattern, hook, data)
-
-        if count == 0:
-            print("❌ Target rule not found in kernel/Makefile")
+        if not replaced:
+            print("❌ Target rule not found in kernel/Makefile!")
             exit(1)
 
         with open("kernel/Makefile", "w") as f:
-            f.write(new_data)
+            f.writelines(new_lines)
 
-        print(f"✅ Successfully patched kernel/Makefile ({count} match replaced)")
+        print("✅ Successfully hooked kernel/Makefile to use stock_defconfig")
         '
 
         echo "=== Verifying kernel/Makefile patch ==="
-        grep -C 5 "ikcfg_gz" kernel/Makefile || { echo "❌ Verification failed"; exit 1; }
+        grep -C 3 "stock_defconfig" kernel/Makefile || { echo "❌ Failed to verify kernel/Makefile hook"; exit 1; }
+        echo "=== Verifying stock_defconfig ==="
+        grep "CONFIG_SYSVIPC" arch/arm64/configs/stock_defconfig
 
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
