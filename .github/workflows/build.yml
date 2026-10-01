@@ -378,54 +378,6 @@ jobs:
         $C --enable CONFIG_IP6_NF_TARGET_HL
         $C --enable CONFIG_IP6_NF_MATCH_HL
 
-    # ── 17b. Spoof VINTF Kernel Configs ─────────────────────────────────────────
-    - name: Suppress Internal Problem Popup (Spoof VINTF Configs)
-      working-directory: kernel_platform/common
-      run: |
-        # 1. Create helper script that streams the full 4,500+ line .config while masking SYSVIPC
-        cat > scripts/spoof_vintf_config.py << 'EOF'
-        import sys
-
-        if len(sys.argv) < 2:
-            sys.exit(1)
-
-        with open(sys.argv[1], "r", errors="ignore") as f:
-            for line in f:
-                if line.startswith("CONFIG_SYSVIPC="):
-                    sys.stdout.write("# CONFIG_SYSVIPC is not set\n")
-                elif line.startswith("CONFIG_SYSVIPC_"):
-                    continue
-                else:
-                    sys.stdout.write(line)
-        EOF
-
-        # 2. Hook kernel/Makefile to pipe through our helper script into gzip
-        python3 -c '
-        with open("kernel/Makefile", "r", errors="ignore") as f:
-            content = f.read()
-
-        if "if_changed,gzip" not in content:
-            print("❌ Target if_changed,gzip not found in kernel/Makefile")
-            exit(1)
-
-        content = content.replace("if_changed,gzip", "if_changed,ikcfg_gz")
-
-        hook_defs = """quiet_cmd_ikcfg_gz = GZIP    $@
-              cmd_ikcfg_gz = python3 $(srctree)/scripts/spoof_vintf_config.py $< | gzip -n -f -9 > $@
-
-        targets += config_data.gz"""
-
-        content = content.replace("targets += config_data.gz", hook_defs)
-
-        with open("kernel/Makefile", "w") as f:
-            f.write(content)
-
-        print("✅ Successfully hooked kernel/Makefile using helper script")
-        '
-
-        echo "=== Verifying kernel/Makefile patch ==="
-        grep -C 5 "ikcfg_gz" kernel/Makefile || { echo "❌ Verification failed"; exit 1; }
-
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
       run: |
