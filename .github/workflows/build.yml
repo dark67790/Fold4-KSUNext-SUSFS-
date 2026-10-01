@@ -378,6 +378,22 @@ jobs:
         $C --enable CONFIG_IP6_NF_TARGET_HL
         $C --enable CONFIG_IP6_NF_MATCH_HL
 
+    # ── 17b. Spoof VINTF Kernel Configs ─────────────────────────────────────────
+    - name: Suppress Internal Problem Popup (Spoof VINTF Configs)
+      working-directory: kernel_platform/common
+      run: |
+        # Strip CONFIG_SYSVIPC=y when generating /proc/config.gz archive (kernel/config_data.gz)
+        # This keeps SYSVIPC compiled and working while hiding it from Android VINTF check.
+        if grep -q "cat \$< | gzip" kernel/Makefile; then
+          sed -i 's|cat \$< | gzip|grep -v "^CONFIG_SYSVIPC=y" \$< | gzip|g' kernel/Makefile
+          echo "✅ Applied VINTF config spoof to kernel/Makefile"
+        elif grep -q "gzip -n -f -9" kernel/Makefile; then
+          sed -i 's|kernel/config_data \$<|kernel/config_data <(grep -v "^CONFIG_SYSVIPC=y" \$<)|g' kernel/Makefile || true
+        else
+          # Fallback generic replacement across kernel/Makefile
+          sed -i 's/\$(CONFIG_SHELL) \$(srctree)\/scripts\/extract-ikconfig/\$(CONFIG_SHELL) \$(srctree)\/scripts\/extract-ikconfig | grep -v "^CONFIG_SYSVIPC=y"/' kernel/Makefile 2>/dev/null || true
+        fi
+
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
       run: |
