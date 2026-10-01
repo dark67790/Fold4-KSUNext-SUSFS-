@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: SM-F936B · KSU-Next · SUSFS v2.1.0 · Droidspaces
+    name: SM-F936B · KSU-Next · SUSFS v2.1.0 · Droidspaces · ZeroMount
     runs-on: ubuntu-latest
 
     steps:
@@ -54,7 +54,7 @@ jobs:
         sudo apt-get update -qq
         sudo apt-get install -y -qq \
           bc bison flex libssl-dev libelf-dev \
-          python3-pip unzip git patch coreutils curl \
+          python3-pip unzip git patch coreutils curl perl \
           build-essential cpio wget zip
 
     # ── 5. Samsung source + toolchain ──────────────────────────────────────────
@@ -217,6 +217,57 @@ jobs:
 
         [ "$FAIL" -ne 0 ] && { echo "❌ KSU-Next SUSFS checks failed — aborting"; exit 1; }
         echo "✅ All KSU-Next SUSFS checks passed"
+
+    # ── 11b. ZeroMount ─────────────────────────────────────────────────────────
+    - name: Apply ZeroMount
+      working-directory: kernel_platform/common
+      run: |
+        git clone --depth 1 https://github.com/jimsterino98/Super-Builders.git "$GITHUB_WORKSPACE/Super-Builders"
+        ZM_PATCH="$GITHUB_WORKSPACE/Super-Builders/android12-5.10/WildKSU/patches/60_zeromount-android12-5.10.patch"
+        [ -f "$ZM_PATCH" ] || { echo "❌ ZeroMount patch not found: $ZM_PATCH"; ls "$GITHUB_WORKSPACE/Super-Builders"; exit 1; }
+
+        patch -p1 < "$ZM_PATCH" || true
+
+        if [ -f fs/proc/task_mmu.c.rej ] && ! grep -q zeromount_spoof_mmap_metadata fs/proc/task_mmu.c; then
+          echo "Fixing task_mmu.c..."
+          sed -i '/pgoff = ((loff_t)vma->vm_pgoff) << PAGE_SHIFT;/a\
+        #ifdef CONFIG_ZEROMOUNT\
+        \tzeromount_spoof_mmap_metadata(inode, \&dev, \&ino);\
+        #endif' fs/proc/task_mmu.c
+        fi
+
+        if [ -f fs/stat.c.rej ] && ! grep -q 'zeromount_stat_hook(dfd, filename, stat, request_mask, flags)' fs/stat.c; then
+          echo "Fixing stat.c..."
+          perl -0pi -e 's@(static int vfs_statx\(.*?\)\s*\{.*?orig_flow:\n#endif\n)@$1\n#ifdef CONFIG_ZEROMOUNT\n\tif (filename) {\n\t\tint zm_ret = zeromount_stat_hook(dfd, filename, stat, request_mask, flags);\n\t\tif (zm_ret != -ENOENT)\n\t\t\treturn zm_ret;\n\t}\n#endif\n\n@s' fs/stat.c
+        fi
+
+        if [ -f fs/Kconfig.rej ] && ! grep -q '^config ZEROMOUNT$' fs/Kconfig; then
+          echo "Fixing fs/Kconfig..."
+          perl -0pi -e 's@(config IO_WQ\n\tbool\n)@$1\nconfig ZEROMOUNT\n\tbool "ZeroMount Path Redirection Subsystem"\n\tdefault y\n\thelp\n\t  ZeroMount allows path redirection and virtual file injection\n\t  without mounting filesystems.\n\n@' fs/Kconfig
+        fi
+
+        find . -name "*.rej" -delete
+        find . -name "*.orig" -delete
+
+        echo "CONFIG_ZEROMOUNT=y" >> "$GKI_DEFCONFIG"
+
+    - name: Verify ZeroMount
+      working-directory: kernel_platform/common
+      run: |
+        FAIL=0
+        check() {
+          grep -q "$3" "$2" 2>/dev/null \
+            && echo "✅ $1" \
+            || { echo "❌ $1 — '$3' not found in $2"; FAIL=1; }
+        }
+        check "Kconfig ZEROMOUNT"   fs/Kconfig            "config ZEROMOUNT"
+        check "stat.c hook"         fs/stat.c             "zeromount_stat_hook"
+        check "task_mmu.c spoof"    fs/proc/task_mmu.c    "zeromount_spoof_mmap_metadata"
+        grep -rq "ZEROMOUNT" fs/Makefile fs/*.c 2>/dev/null \
+          && echo "✅ zeromount sources present" \
+          || { echo "❌ no zeromount sources in fs/"; FAIL=1; }
+        [ "$FAIL" -ne 0 ] && { echo "❌ ZeroMount checks failed"; exit 1; }
+        echo "✅ ZeroMount OK"
 
     # ── 12. Kernel config ──────────────────────────────────────────────────────
     - name: Set Kernel Config
@@ -393,7 +444,7 @@ jobs:
       if: always() && steps.package.outcome == 'success'
       uses: actions/upload-artifact@v4
       with:
-        name: Fold4-KSUNext-SUSFS-Droidspaces
+        name: Fold4-KSUNext-SUSFS-Droidspaces-ZeroMount
         path: |
           ${{ steps.package.outputs.image }}
           ${{ steps.package.outputs.image_lz4 }}
