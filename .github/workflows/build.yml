@@ -404,12 +404,9 @@ jobs:
         # make the driver's include paths absolute
         sed -i 's|-I\$(src)|-I$(srctree)/$(src)|g' $D/Makefile
         sed -i 's|-I\$(shell pwd)|-I$(srctree)/$(src)|g' $D/Makefile
-        cat >> $D/Makefile << 'EOF'
-        ccflags-y += -Wno-unknown-warning-option
-        ccflags-y += -I$(srctree)/$(src)/include
-        ccflags-y += -I$(srctree)/$(src)/platform
-        ccflags-y += -I$(srctree)/$(src)/hal/phydm
-        EOF
+
+        # don't let old-code warnings stop the build (this driver only)
+        sed -i '1i ccflags-y += -Wno-error -Wno-uninitialized -Wno-header-guard -Wno-unknown-warning-option' $D/Makefile
 
         echo "--- check these lines ---"
         grep -n "^obj-" $D/Makefile
