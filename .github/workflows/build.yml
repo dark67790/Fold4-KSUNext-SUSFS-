@@ -143,7 +143,7 @@ jobs:
         check "fs/Makefile compiles susfs" fs/Makefile                  "susfs.o"
         check "exec.c patched"             fs/exec.c                    "susfs_def.h"
         check "namespace.c SUS_MOUNT"      fs/namespace.c               "CONFIG_KSU_SUSFS_SUS_MOUNT"
-        check "namespace.c externs"        fs/namespace.c               "susfs_is_current_ksu_domain"
+        check "namespace.c externs"        fs/namespace.c               "susfs_is_currentksu_domain"
         check "namespace.c copy_flags"     fs/namespace.c               "CL_COPY_MNT_NS"
         check "open.c patched"             fs/open.c                    "is_inode_open_redirect"
         check "proc/base.c include"        fs/proc/base.c               "susfs_def.h"
@@ -386,7 +386,7 @@ jobs:
         git clone --depth 1 https://github.com/morrownr/8812au-20210820.git $D
         rm -rf $D/.git
 
-        # tell the kernel about the driver
+        # 1. tell the kernel the driver exists
         cat > $D/Kconfig << 'EOF'
         config RTL8812AU
         	tristate "Realtek RTL8812AU USB WiFi (AWUS036ACH)"
@@ -395,22 +395,20 @@ jobs:
         echo 'source "drivers/net/wireless/rtl8812au/Kconfig"' >> drivers/net/wireless/Kconfig
         echo 'obj-$(CONFIG_RTL8812AU) += rtl8812au/' >> drivers/net/wireless/Makefile
 
-        # fix the driver's own Makefile
-        sed -i 's/-Wno-stringop-overread//g' $D/Makefile
-        sed -i 's/^CONFIG_PLATFORM_I386_PC *=.*/CONFIG_PLATFORM_I386_PC = n/' $D/Makefile
-        sed -i 's/^obj-m *[:+]*= */obj-$(CONFIG_RTL8812AU) := /' $D/Makefile
-        sed -i 's/-Wno-cast-function-type//g; s/-Wno-enum-int-mismatch//g' $D/Makefile
-
-        # make the driver's include paths absolute
+        # 2. remove flags clang doesn't know, fix relative paths
+        sed -i 's/-Wno-stringop-overread//g; s/-Wno-cast-function-type//g; s/-Wno-enum-int-mismatch//g' $D/Makefile
         sed -i 's|-I\$(src)|-I$(srctree)/$(src)|g' $D/Makefile
-        sed -i 's|-I\$(shell pwd)|-I$(srctree)/$(src)|g' $D/Makefile
 
-        # don't let old-code warnings stop the build (this driver only)
-        sed -i '1i ccflags-y += -Wno-error -Wno-uninitialized -Wno-header-guard -Wno-unknown-warning-option' $D/Makefile
+        # 3. don't stop on warnings + add every driver folder as an include path
+        {
+          echo "ccflags-y += -Wno-error -Wno-uninitialized -Wno-header-guard -Wno-unknown-warning-option"
+          find $D -type d | while read d; do echo "ccflags-y += -I\$(srctree)/$d"; done
+        } > /tmp/top.mk
+        cat /tmp/top.mk $D/Makefile > /tmp/new.mk
+        mv /tmp/new.mk $D/Makefile
 
-        echo "--- check these lines ---"
-        grep -n "^obj-" $D/Makefile
-        grep -n "^CONFIG_PLATFORM" $D/Makefile | head -30
+        echo "--- top of driver Makefile ---"
+        head -8 $D/Makefile
 
         echo "CONFIG_CFG80211=y" >> "$GKI_DEFCONFIG"
         echo "CONFIG_RTL8812AU=y" >> "$GKI_DEFCONFIG"
