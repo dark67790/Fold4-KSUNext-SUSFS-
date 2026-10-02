@@ -399,6 +399,8 @@ jobs:
         sed -i 's/-Wno-stringop-overread//g' $D/Makefile
         sed -i 's/^CONFIG_PLATFORM_I386_PC *=.*/CONFIG_PLATFORM_I386_PC = n/' $D/Makefile
         sed -i 's/^obj-m *[:+]*= */obj-$(CONFIG_RTL8812AU) := /' $D/Makefile
+        sed -i 's/-Wno-cast-function-type//g; s/-Wno-enum-int-mismatch//g' $D/Makefile
+        echo 'ccflags-y += -Wno-unknown-warning-option' >> $D/Makefile
 
         echo "--- check these lines ---"
         grep -n "^obj-" $D/Makefile
