@@ -143,7 +143,7 @@ jobs:
         check "fs/Makefile compiles susfs" fs/Makefile                  "susfs.o"
         check "exec.c patched"             fs/exec.c                    "susfs_def.h"
         check "namespace.c SUS_MOUNT"      fs/namespace.c               "CONFIG_KSU_SUSFS_SUS_MOUNT"
-        check "namespace.c externs"        fs/namespace.c               "susfs_is_currentksu_domain"
+        check "namespace.c externs"        fs/namespace.c               "susfs_is_current_ksu_domain"
         check "namespace.c copy_flags"     fs/namespace.c               "CL_COPY_MNT_NS"
         check "open.c patched"             fs/open.c                    "is_inode_open_redirect"
         check "proc/base.c include"        fs/proc/base.c               "susfs_def.h"
