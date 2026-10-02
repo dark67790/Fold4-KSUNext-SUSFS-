@@ -378,13 +378,42 @@ jobs:
         $C --enable CONFIG_IP6_NF_TARGET_HL
         $C --enable CONFIG_IP6_NF_MATCH_HL
 
+    # ── 17b. RTL8812AU built into kernel ───────────────────────────────────────
+    - name: Add RTL8812AU driver
+      working-directory: kernel_platform/common
+      run: |
+        D=drivers/net/wireless/rtl8812au
+        git clone --depth 1 https://github.com/morrownr/8812au-20210820.git $D
+        rm -rf $D/.git
+
+        # tell the kernel about the driver
+        cat > $D/Kconfig << 'EOF'
+        config RTL8812AU
+        	tristate "Realtek RTL8812AU USB WiFi (AWUS036ACH)"
+        	depends on USB && CFG80211
+        EOF
+        echo 'source "drivers/net/wireless/rtl8812au/Kconfig"' >> drivers/net/wireless/Kconfig
+        echo 'obj-$(CONFIG_RTL8812AU) += rtl8812au/' >> drivers/net/wireless/Makefile
+
+        # fix the driver's own Makefile
+        sed -i 's/-Wno-stringop-overread//g' $D/Makefile
+        sed -i 's/^CONFIG_PLATFORM_I386_PC *=.*/CONFIG_PLATFORM_I386_PC = n/' $D/Makefile
+        sed -i 's/^obj-m *[:+]*= */obj-$(CONFIG_RTL8812AU) := /' $D/Makefile
+
+        echo "--- check these lines ---"
+        grep -n "^obj-" $D/Makefile
+        grep -n "^CONFIG_PLATFORM" $D/Makefile | head -30
+
+        echo "CONFIG_CFG80211=y" >> "$GKI_DEFCONFIG"
+        echo "CONFIG_RTL8812AU=y" >> "$GKI_DEFCONFIG"
+
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
         mkdir -p out/target/product/q4q/
-        export LTO=full
+        export LTO=thin
         export KBUILD_MODPOST_WARN=1
         bash build_kernel_GKI.sh || true
 
