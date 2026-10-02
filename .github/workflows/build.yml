@@ -330,7 +330,7 @@ jobs:
         find . -name "*.rej" -delete
         find . -name "*.orig" -delete
 
-    # ── 16. ntsync ─────────────────────────────────────────────────────────────
+    # ── 16. ntsync ─────────────────────────────────────────────────────
     - name: Apply ntsync Support
       working-directory: kernel_platform/common
       run: |
@@ -402,8 +402,8 @@ jobs:
         # 3. don't stop on warnings + add every driver folder as an include path
         {
           echo "ccflags-y += -Wno-error -Wno-uninitialized -Wno-header-guard -Wno-unknown-warning-option"
-          echo "ccflags-y += -Daes_encrypt=rtw_aes_encrypt"
-          echo "ccflags-y += -Daes_decrypt=rtw_aes_decrypt"
+          echo "ccflags-y += -Daes_encrypt=ra8812_aes_encrypt"
+          echo "ccflags-y += -Daes_decrypt=ra8812_aes_decrypt"
           find $D -type d | while read d; do echo "ccflags-y += -I\$(srctree)/$d"; done
         } > /tmp/top.mk
         cat /tmp/top.mk $D/Makefile > /tmp/new.mk
