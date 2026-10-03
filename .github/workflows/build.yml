@@ -86,6 +86,16 @@ jobs:
         tar -xzf toolchain.tar.gz -C kernel_platform/
         rm toolchain.tar.gz
 
+    # ── 5b. Inspect cfg80211 ───────────────────────────────────────────────────
+    - name: Inspect cfg80211
+      run: |
+        echo "--- cfg80211.h copies ---"
+        find kernel_platform -name cfg80211.h -path '*include/net*' -exec md5sum {} \;
+        echo "--- core.c copies ---"
+        find kernel_platform -path '*net/wireless/core.c'
+        echo "--- core.c lines 410-424 and 758-768 ---"
+        sed -n '410,424p;758,768p' kernel_platform/common/net/wireless/core.c
+
     # ── 6. Patch build target ──────────────────────────────────────────────────
     - name: Patch Build Target
       run: |
