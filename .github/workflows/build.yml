@@ -396,6 +396,7 @@ jobs:
 
         sed -i 's/-Wno-stringop-overread//g; s/-Wno-cast-function-type//g; s/-Wno-enum-int-mismatch//g' $D/Makefile
         sed -i 's|-I\$(src)|-I$(srctree)/$(src)|g' $D/Makefile
+        sed -i 's/^CONFIG_WIFI_MONITOR *= *n/CONFIG_WIFI_MONITOR = y/' $D/Makefile
 
         {
           echo "ccflags-y += -Wno-error -Wno-uninitialized -Wno-header-guard -Wno-unknown-warning-option"
