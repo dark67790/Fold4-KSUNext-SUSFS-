@@ -414,6 +414,19 @@ jobs:
 
         echo "CONFIG_88XXAU=m" >> "$GKI_DEFCONFIG"
 
+    # ── 17c. AR9271 (ath9k_htc) as modules ─────────────────────────────────────
+    - name: Add ath9k_htc (AR9271)
+      working-directory: kernel_platform/common
+      run: |
+        test -f drivers/net/wireless/ath/ath9k/htc_drv_main.c \
+          || { echo "❌ ath9k_htc source missing from tree"; exit 1; }
+
+        C="./scripts/config --file $GKI_DEFCONFIG"
+        $C --module CONFIG_CFG80211
+        $C --module CONFIG_MAC80211
+        $C --enable CONFIG_WLAN_VENDOR_ATH
+        $C --module CONFIG_ATH9K_HTC
+
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
       run: |
@@ -457,6 +470,13 @@ jobs:
           echo "⚠️ 88XXau.ko not found"
         fi
 
+        # Grab the compiled ath9k_htc (AR9271) modules
+        mkdir -p "$GITHUB_WORKSPACE/modules"
+        for m in ath ath9k_hw ath9k_common ath9k_htc; do
+          f=$(find out -name "$m.ko" | head -n 1)
+          if [ -n "$f" ]; then cp "$f" "$GITHUB_WORKSPACE/modules/"; echo "✅ $m.ko"; else echo "⚠️ $m.ko missing"; fi
+        done
+
         echo "✅ Image: $IMAGE ($(du -h "$IMAGE" | cut -f1))"
         [ -n "$IMAGE_LZ4" ] && [ -f "$IMAGE_LZ4" ] && echo "✅ Image.lz4: $IMAGE_LZ4 ($(du -h "$IMAGE_LZ4" | cut -f1))"
         
@@ -488,6 +508,7 @@ jobs:
           ${{ steps.package.outputs.image }}
           ${{ steps.package.outputs.image_lz4 }}
           88XXau.ko
+          modules/*.ko
         compression-level: 0
 
     # ── 20. Collect patch rejects (always) ─────────────────────────────────────
