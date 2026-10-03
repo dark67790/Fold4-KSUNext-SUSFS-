@@ -96,6 +96,12 @@ jobs:
         echo "--- core.c lines 410-424 and 758-768 ---"
         sed -n '410,424p;758,768p' kernel_platform/common/net/wireless/core.c
 
+    # ── 5c. Find cfg80211 config ───────────────────────────────────────────────
+    - name: Find cfg80211 config
+      run: |
+        grep -rIn -E "CONFIG_(CFG80211|NL80211_TESTMODE|MAC80211)" kernel_platform \
+          --include='*.config' --include='*defconfig' --include='build.config*' 2>/dev/null | head -60
+
     # ── 6. Patch build target ──────────────────────────────────────────────────
     - name: Patch Build Target
       run: |
