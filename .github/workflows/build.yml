@@ -378,37 +378,41 @@ jobs:
         $C --enable CONFIG_IP6_NF_TARGET_HL
         $C --enable CONFIG_IP6_NF_MATCH_HL
 
-    # ── 17b. RTL8812AU as module ───────────────────────────────────────────────
-    - name: Add RTL8812AU driver
+    # ── 17b. RTL88XXAU (aircrack-ng, Kali commit) as module ────────────────────
+    - name: Add RTL88XXAU driver
       working-directory: kernel_platform/common
       run: |
         D=drivers/net/wireless/rtl8812au
-        git clone --depth 1 https://github.com/morrownr/8812au-20210820.git $D
+        git clone https://github.com/aircrack-ng/rtl8812au.git $D
+        git -C $D checkout c3fb89a
         rm -rf $D/.git
 
         cat > $D/Kconfig << 'EOF'
-        config RTL8812AU
-        	tristate "Realtek RTL8812AU USB WiFi (AWUS036ACH)"
+        config 88XXAU
+        	tristate "Realtek 88XXau USB WiFi (AWUS036ACH)"
         	depends on USB
         EOF
         echo 'source "drivers/net/wireless/rtl8812au/Kconfig"' >> drivers/net/wireless/Kconfig
-        echo 'obj-$(CONFIG_RTL8812AU) += rtl8812au/' >> drivers/net/wireless/Makefile
+        echo 'obj-$(CONFIG_88XXAU) += rtl8812au/' >> drivers/net/wireless/Makefile
 
-        sed -i 's/-Wno-stringop-overread//g; s/-Wno-cast-function-type//g; s/-Wno-enum-int-mismatch//g' $D/Makefile
-        sed -i 's|-I\$(src)|-I$(srctree)/$(src)|g' $D/Makefile
-        sed -i 's/^CONFIG_WIFI_MONITOR *= *n/CONFIG_WIFI_MONITOR = y/' $D/Makefile
+        # clang-safe flags, smaller module, logging on
+        sed -i 's/-Wno-cast-function-type//; s/-Wno-stringop-overread//; s/ -g$//' $D/Makefile
+        sed -i '/^EXTRA_LDFLAGS/d' $D/Makefile
+        sed -i 's/^CONFIG_RTW_DEBUG *= *n/CONFIG_RTW_DEBUG = y/; s/^CONFIG_RTW_LOG_LEVEL *= *2/CONFIG_RTW_LOG_LEVEL = 4/' $D/Makefile
 
         {
           echo "ccflags-y += -Wno-error -Wno-uninitialized -Wno-header-guard -Wno-unknown-warning-option"
-          echo "ccflags-y += -Daes_encrypt=ra8812_aes_encrypt"
-          echo "ccflags-y += -Daes_decrypt=ra8812_aes_decrypt"
           echo "ccflags-y += -DCONFIG_NL80211_TESTMODE=1"
+          echo "ccflags-y += -Daes_encrypt=ra8812_aes_encrypt -Daes_decrypt=ra8812_aes_decrypt"
           find $D -type d | while read d; do echo "ccflags-y += -I\$(srctree)/$d"; done
         } > /tmp/top.mk
         cat /tmp/top.mk $D/Makefile > /tmp/new.mk
         mv /tmp/new.mk $D/Makefile
 
-        echo "CONFIG_RTL8812AU=m" >> "$GKI_DEFCONFIG"
+        echo "--- top of driver Makefile ---"
+        head -6 $D/Makefile
+
+        echo "CONFIG_88XXAU=m" >> "$GKI_DEFCONFIG"
 
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
@@ -444,13 +448,13 @@ jobs:
           exit 1
         fi
 
-        # Grab the compiled 8812au module
-        KO=$(find out -name '8812au.ko' | head -n 1)
+        # Grab the compiled 88XXau module
+        KO=$(find out -name '88XXau.ko' | head -n 1)
         if [ -n "$KO" ] && [ -f "$KO" ]; then
-          cp "$KO" "$GITHUB_WORKSPACE/8812au.ko"
+          cp "$KO" "$GITHUB_WORKSPACE/88XXau.ko"
           echo "✅ Found and copied module: $KO"
         else
-          echo "⚠️ 8812au.ko not found"
+          echo "⚠️ 88XXau.ko not found"
         fi
 
         echo "✅ Image: $IMAGE ($(du -h "$IMAGE" | cut -f1))"
@@ -470,9 +474,9 @@ jobs:
           RESP=$(curl -s -F "file=@${{ steps.package.outputs.image_lz4 }}" "https://$SERVER.gofile.io/uploadFile")
           echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
         fi
-        if [ -f "8812au.ko" ]; then
-          RESP=$(curl -s -F "file=@8812au.ko" "https://$SERVER.gofile.io/uploadFile")
-          echo "✅ 8812au.ko → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+        if [ -f "88XXau.ko" ]; then
+          RESP=$(curl -s -F "file=@88XXau.ko" "https://$SERVER.gofile.io/uploadFile")
+          echo "✅ 88XXau.ko → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
         fi
 
     - name: Upload to GitHub Artifacts
@@ -483,7 +487,7 @@ jobs:
         path: |
           ${{ steps.package.outputs.image }}
           ${{ steps.package.outputs.image_lz4 }}
-          8812au.ko
+          88XXau.ko
         compression-level: 0
 
     # ── 20. Collect patch rejects (always) ─────────────────────────────────────
