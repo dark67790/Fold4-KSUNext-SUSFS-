@@ -424,32 +424,38 @@ jobs:
       id: package
       run: |
         GKI_DIST="out/msm-waipio-waipio-gki/gki_kernel/dist"
-        IMAGE="$GKI_DIST/Image"
-        IMAGE_LZ4="$GKI_DIST/Image.lz4"
 
+        IMAGE="$GKI_DIST/Image"
         if [ ! -f "$IMAGE" ]; then
-          echo "❌ Image not found — GKI build failed"
+          echo "⚠️ Image not in dist, checking raw build directory..."
+          IMAGE=$(find out/ -type f -name "Image" -path "*gki*" | head -n 1)
+        fi
+
+        IMAGE_LZ4="$GKI_DIST/Image.lz4"
+        if [ ! -f "$IMAGE_LZ4" ]; then
+          IMAGE_LZ4=$(find out/ -type f -name "Image.lz4" -path "*gki*" | head -n 1)
+        fi
+
+        if [ -z "$IMAGE" ] || [ ! -f "$IMAGE" ]; then
+          echo "❌ Image not found anywhere"
+          find out -name 'Image*' | head -20
           exit 1
         fi
 
-        echo "✅ Image: $(du -h $IMAGE | cut -f1)"
-        [ -f "$IMAGE_LZ4" ] && echo "✅ Image.lz4: $(du -h $IMAGE_LZ4 | cut -f1)"
+        # Grab the compiled 8812au module
+        KO=$(find out -name '8812au.ko' | head -n 1)
+        if [ -n "$KO" ] && [ -f "$KO" ]; then
+          cp "$KO" "$GITHUB_WORKSPACE/8812au.ko"
+          echo "✅ Found and copied module: $KO"
+        else
+          echo "⚠️ 8812au.ko not found"
+        fi
+
+        echo "✅ Image: $IMAGE ($(du -h "$IMAGE" | cut -f1))"
+        [ -n "$IMAGE_LZ4" ] && [ -f "$IMAGE_LZ4" ] && echo "✅ Image.lz4: $IMAGE_LZ4 ($(du -h "$IMAGE_LZ4" | cut -f1))"
+        
         echo "image=$IMAGE" >> $GITHUB_OUTPUT
         echo "image_lz4=$IMAGE_LZ4" >> $GITHUB_OUTPUT
-
-    - name: Find driver module
-      if: always()
-      run: |
-        find . -name '8812au.ko' -exec ls -la {} \;
-        find . -name '8812au.ko' -exec cp {} $GITHUB_WORKSPACE/ \;
-
-    - name: Upload driver module
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: rtl8812au-ko
-        path: 8812au.ko
-        if-no-files-found: warn
 
     - name: Upload to GoFile
       if: always() && steps.package.outcome == 'success'
@@ -462,6 +468,10 @@ jobs:
           RESP=$(curl -s -F "file=@${{ steps.package.outputs.image_lz4 }}" "https://$SERVER.gofile.io/uploadFile")
           echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
         fi
+        if [ -f "8812au.ko" ]; then
+          RESP=$(curl -s -F "file=@8812au.ko" "https://$SERVER.gofile.io/uploadFile")
+          echo "✅ 8812au.ko → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
+        fi
 
     - name: Upload to GitHub Artifacts
       if: always() && steps.package.outcome == 'success'
@@ -471,6 +481,7 @@ jobs:
         path: |
           ${{ steps.package.outputs.image }}
           ${{ steps.package.outputs.image_lz4 }}
+          8812au.ko
         compression-level: 0
 
     # ── 20. Collect patch rejects (always) ─────────────────────────────────────
