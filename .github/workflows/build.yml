@@ -435,6 +435,16 @@ jobs:
         $C --enable CONFIG_WLAN_VENDOR_ATH
         $C --module CONFIG_ATH9K_HTC
 
+        # firmware built into the kernel (no file / path / SELinux on the phone)
+        F="$GITHUB_WORKSPACE/fwdir"
+        mkdir -p "$F/ath9k_htc"
+        curl -fL -o "$F/ath9k_htc/htc_9271-1.4.0.fw" \
+          "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/ath9k_htc/htc_9271-1.4.0.fw"
+        [ "$(stat -c %s "$F/ath9k_htc/htc_9271-1.4.0.fw")" -eq 51008 ] \
+          || { echo "❌ firmware download wrong size"; exit 1; }
+        $C --set-str CONFIG_EXTRA_FIRMWARE "ath9k_htc/htc_9271-1.4.0.fw"
+        $C --set-str CONFIG_EXTRA_FIRMWARE_DIR "$F"
+
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
       run: |
