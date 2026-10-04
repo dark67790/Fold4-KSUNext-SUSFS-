@@ -426,13 +426,11 @@ jobs:
         test -f drivers/net/wireless/ath/ath9k/htc_drv_main.c \
           || { echo "❌ ath9k_htc source missing from tree"; exit 1; }
 
-        # vendor mac80211 has no LED support -> stop ath9k from forcing it on
-        sed -i '/select MAC80211_LEDS/d' drivers/net/wireless/ath/ath9k/Kconfig
-
         C="./scripts/config --file $GKI_DEFCONFIG"
         $C --module CONFIG_CFG80211
         $C --module CONFIG_MAC80211
-        # match vendor ieee80211_ops layout (best guess, see info step above)
+        $C --enable CONFIG_MAC80211_LEDS
+        # match vendor ieee80211_ops layout
         $C --enable CONFIG_NL80211_TESTMODE
         $C --enable CONFIG_WLAN_VENDOR_ATH
         $C --module CONFIG_ATH9K_HTC
@@ -482,7 +480,7 @@ jobs:
 
         # Grab the compiled ath9k_htc (AR9271) modules
         mkdir -p "$GITHUB_WORKSPACE/modules"
-        for m in ath ath9k_hw ath9k_common ath9k_htc; do
+        for m in mac80211 ath ath9k_hw ath9k_common ath9k_htc; do
           f=$(find out -name "$m.ko" | head -n 1)
           if [ -n "$f" ]; then cp "$f" "$GITHUB_WORKSPACE/modules/"; echo "✅ $m.ko"; else echo "⚠️ $m.ko missing"; fi
         done
