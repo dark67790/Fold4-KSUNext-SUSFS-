@@ -415,15 +415,25 @@ jobs:
         echo "CONFIG_88XXAU=m" >> "$GKI_DEFCONFIG"
 
     # ── 17c. AR9271 (ath9k_htc) as modules ─────────────────────────────────────
+    - name: Show Samsung wifi config (info only)
+      run: |
+        find kernel_platform -type f -path '*arm64/configs*' \( -name '*.config' -o -name '*defconfig' \) \
+          -exec grep -HE '^CONFIG_(CFG80211|MAC80211|NL80211_TESTMODE)[A-Z0-9_]*=' {} + 2>/dev/null | head -80 || true
+
     - name: Add ath9k_htc (AR9271)
       working-directory: kernel_platform/common
       run: |
         test -f drivers/net/wireless/ath/ath9k/htc_drv_main.c \
           || { echo "❌ ath9k_htc source missing from tree"; exit 1; }
 
+        # vendor mac80211 has no LED support -> stop ath9k from forcing it on
+        sed -i '/select MAC80211_LEDS/d' drivers/net/wireless/ath/ath9k/Kconfig
+
         C="./scripts/config --file $GKI_DEFCONFIG"
         $C --module CONFIG_CFG80211
         $C --module CONFIG_MAC80211
+        # match vendor ieee80211_ops layout (best guess, see info step above)
+        $C --enable CONFIG_NL80211_TESTMODE
         $C --enable CONFIG_WLAN_VENDOR_ATH
         $C --module CONFIG_ATH9K_HTC
 
