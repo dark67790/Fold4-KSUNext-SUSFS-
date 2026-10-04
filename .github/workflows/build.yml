@@ -445,6 +445,51 @@ jobs:
         $C --set-str CONFIG_EXTRA_FIRMWARE "ath9k_htc/htc_9271-1.4.0.fw"
         $C --set-str CONFIG_EXTRA_FIRMWARE_DIR "$F"
 
+    # ── 17d. rtw88 backport (RTL8812AU, mac80211) as modules ───────────────────
+    - name: Add rtw88 (RTL8812AU)
+      working-directory: kernel_platform/common
+      run: |
+        D=drivers/net/wireless/rtw88bp
+        git clone --depth 1 https://github.com/lwfinger/rtw88.git /tmp/rtw88
+        mkdir -p $D
+        cp /tmp/rtw88/*.c /tmp/rtw88/*.h $D/
+
+        cat > $D/Kconfig << 'EOF'
+        config RTW88BP
+        	tristate "Realtek rtw88 backport (RTL8812AU)"
+        	depends on USB && MAC80211
+        EOF
+        echo 'source "drivers/net/wireless/rtw88bp/Kconfig"' >> drivers/net/wireless/Kconfig
+        echo 'obj-$(CONFIG_RTW88BP) += rtw88bp/' >> drivers/net/wireless/Makefile
+
+        cat > $D/Makefile << 'EOF'
+        ccflags-y += -std=gnu11 -Wno-declaration-after-statement -Wno-error -Wno-unknown-warning-option
+        ccflags-y += -DCONFIG_RTW88_LEDS=1 -DCONFIG_RTW88_DEBUG=1 -D__CHECK_ENDIAN__
+
+        obj-$(CONFIG_RTW88BP) += rtw_core.o rtw_usb.o rtw_88xxa.o rtw_8812a.o rtw_8812au.o
+
+        rtw_core-objs := main.o led.o mac80211.o util.o debug.o tx.o rx.o mac.o phy.o \
+        		 coex.o efuse.o fw.o ps.o sec.o bf.o regd.o sar.o
+        ifeq ($(CONFIG_PM),y)
+        rtw_core-objs += wow.o
+        endif
+        rtw_usb-objs := usb.o
+        rtw_88xxa-objs := rtw88xxa.o
+        rtw_8812a-objs := rtw8812a.o rtw8812a_table.o
+        rtw_8812au-objs := rtw8812au.o
+        EOF
+
+        # firmware: add to the existing built-in list (keep the AR9271 one)
+        F="$GITHUB_WORKSPACE/fwdir"
+        mkdir -p "$F/rtw88"
+        cp /tmp/rtw88/firmware/rtw8812a_fw.bin "$F/rtw88/"
+        test -f "$F/ath9k_htc/htc_9271-1.4.0.fw" || { echo "❌ run 17c first"; exit 1; }
+
+        C="./scripts/config --file $GKI_DEFCONFIG"
+        $C --module CONFIG_RTW88BP
+        $C --set-str CONFIG_EXTRA_FIRMWARE "ath9k_htc/htc_9271-1.4.0.fw rtw88/rtw8812a_fw.bin"
+        $C --set-str CONFIG_EXTRA_FIRMWARE_DIR "$F"
+
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
       run: |
@@ -494,6 +539,20 @@ jobs:
           f=$(find out -name "$m.ko" | head -n 1)
           if [ -n "$f" ]; then cp "$f" "$GITHUB_WORKSPACE/modules/"; echo "✅ $m.ko"; else echo "⚠️ $m.ko missing"; fi
         done
+
+        # Grab the compiled rtw88 (RTL8812AU) modules
+        for m in rtw_core rtw_usb rtw_88xxa rtw_8812a rtw_8812au; do
+          f=$(find out -name "$m.ko" | head -n 1)
+          if [ -n "$f" ]; then cp "$f" "$GITHUB_WORKSPACE/modules/"; echo "✅ $m.ko"; else echo "⚠️ $m.ko missing"; fi
+        done
+
+        # Strip debug symbols from all modules
+        STRIP=$(find kernel_platform -type f -name llvm-strip | head -1)
+        if [ -n "$STRIP" ]; then
+          for f in "$GITHUB_WORKSPACE"/modules/*.ko "$GITHUB_WORKSPACE/88XXau.ko"; do
+            [ -f "$f" ] && "$STRIP" --strip-debug "$f"
+          done
+        fi
 
         echo "✅ Image: $IMAGE ($(du -h "$IMAGE" | cut -f1))"
         [ -n "$IMAGE_LZ4" ] && [ -f "$IMAGE_LZ4" ] && echo "✅ Image.lz4: $IMAGE_LZ4 ($(du -h "$IMAGE_LZ4" | cut -f1))"
