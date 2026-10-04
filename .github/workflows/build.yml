@@ -378,73 +378,6 @@ jobs:
         $C --enable CONFIG_IP6_NF_TARGET_HL
         $C --enable CONFIG_IP6_NF_MATCH_HL
 
-    # ── 17b. RTL88XXAU (aircrack-ng, Kali commit) as module ────────────────────
-    - name: Add RTL88XXAU driver
-      working-directory: kernel_platform/common
-      run: |
-        D=drivers/net/wireless/rtl8812au
-        git clone https://github.com/aircrack-ng/rtl8812au.git $D
-        git -C $D checkout c3fb89a
-        rm -rf $D/.git
-
-        cat > $D/Kconfig << 'EOF'
-        config 88XXAU
-        	tristate "Realtek 88XXau USB WiFi (AWUS036ACH)"
-        	depends on USB
-        EOF
-        echo 'source "drivers/net/wireless/rtl8812au/Kconfig"' >> drivers/net/wireless/Kconfig
-        echo 'obj-$(CONFIG_88XXAU) += rtl8812au/' >> drivers/net/wireless/Makefile
-
-        # clang-safe flags, smaller module, logging on
-        sed -i 's/-Wno-cast-function-type//; s/-Wno-stringop-overread//; s/ -g$//' $D/Makefile
-        sed -i '/^EXTRA_LDFLAGS/d' $D/Makefile
-        sed -i 's/^CONFIG_RTW_DEBUG *= *n/CONFIG_RTW_DEBUG = y/; s/^CONFIG_RTW_LOG_LEVEL *= *2/CONFIG_RTW_LOG_LEVEL = 4/' $D/Makefile
-
-        {
-          echo "ccflags-y += -Wno-error -Wno-uninitialized -Wno-header-guard -Wno-unknown-warning-option"
-          echo "ccflags-y += -DCONFIG_NL80211_TESTMODE=1"
-          echo "ccflags-y += -Daes_encrypt=ra8812_aes_encrypt -Daes_decrypt=ra8812_aes_decrypt"
-          find $D -type d | while read d; do echo "ccflags-y += -I\$(srctree)/$d"; done
-        } > /tmp/top.mk
-        cat /tmp/top.mk $D/Makefile > /tmp/new.mk
-        mv /tmp/new.mk $D/Makefile
-
-        echo "--- top of driver Makefile ---"
-        head -6 $D/Makefile
-
-        echo "CONFIG_88XXAU=m" >> "$GKI_DEFCONFIG"
-
-    # ── 17c. AR9271 (ath9k_htc) as modules ─────────────────────────────────────
-    - name: Show Samsung wifi config (info only)
-      run: |
-        find kernel_platform -type f -path '*arm64/configs*' \( -name '*.config' -o -name '*defconfig' \) \
-          -exec grep -HE '^CONFIG_(CFG80211|MAC80211|NL80211_TESTMODE)[A-Z0-9_]*=' {} + 2>/dev/null | head -80 || true
-
-    - name: Add ath9k_htc (AR9271)
-      working-directory: kernel_platform/common
-      run: |
-        test -f drivers/net/wireless/ath/ath9k/htc_drv_main.c \
-          || { echo "❌ ath9k_htc source missing from tree"; exit 1; }
-
-        C="./scripts/config --file $GKI_DEFCONFIG"
-        $C --module CONFIG_CFG80211
-        $C --module CONFIG_MAC80211
-        $C --enable CONFIG_MAC80211_LEDS
-        # match vendor ieee80211_ops layout
-        $C --enable CONFIG_NL80211_TESTMODE
-        $C --enable CONFIG_WLAN_VENDOR_ATH
-        $C --module CONFIG_ATH9K_HTC
-
-        # firmware built into the kernel (no file / path / SELinux on the phone)
-        F="$GITHUB_WORKSPACE/fwdir"
-        mkdir -p "$F/ath9k_htc"
-        curl -fL -o "$F/ath9k_htc/htc_9271-1.4.0.fw" \
-          "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/ath9k_htc/htc_9271-1.4.0.fw"
-        [ "$(stat -c %s "$F/ath9k_htc/htc_9271-1.4.0.fw")" -eq 51008 ] \
-          || { echo "❌ firmware download wrong size"; exit 1; }
-        $C --set-str CONFIG_EXTRA_FIRMWARE "ath9k_htc/htc_9271-1.4.0.fw"
-        $C --set-str CONFIG_EXTRA_FIRMWARE_DIR "$F"
-
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
       run: |
@@ -455,49 +388,22 @@ jobs:
         export KBUILD_MODPOST_WARN=1
         bash build_kernel_GKI.sh || true
 
-    # ── 19. Grab Kernel & Driver Artifacts ────────────────────────────────────
+    # ── 19. Grab and upload Image (always runs) ────────────────────────────────
     - name: Grab Kernel Image
       if: always()
       id: package
       run: |
         GKI_DIST="out/msm-waipio-waipio-gki/gki_kernel/dist"
-
         IMAGE="$GKI_DIST/Image"
-        if [ ! -f "$IMAGE" ]; then
-          echo "⚠️ Image not in dist, checking raw build directory..."
-          IMAGE=$(find out/ -type f -name "Image" -path "*gki*" | head -n 1)
-        fi
-
         IMAGE_LZ4="$GKI_DIST/Image.lz4"
-        if [ ! -f "$IMAGE_LZ4" ]; then
-          IMAGE_LZ4=$(find out/ -type f -name "Image.lz4" -path "*gki*" | head -n 1)
-        fi
 
-        if [ -z "$IMAGE" ] || [ ! -f "$IMAGE" ]; then
-          echo "❌ Image not found anywhere"
-          find out -name 'Image*' | head -20
+        if [ ! -f "$IMAGE" ]; then
+          echo "❌ Image not found — GKI build failed"
           exit 1
         fi
 
-        # Grab the compiled 88XXau module
-        KO=$(find out -name '88XXau.ko' | head -n 1)
-        if [ -n "$KO" ] && [ -f "$KO" ]; then
-          cp "$KO" "$GITHUB_WORKSPACE/88XXau.ko"
-          echo "✅ Found and copied module: $KO"
-        else
-          echo "⚠️ 88XXau.ko not found"
-        fi
-
-        # Grab the compiled ath9k_htc (AR9271) modules
-        mkdir -p "$GITHUB_WORKSPACE/modules"
-        for m in mac80211 ath ath9k_hw ath9k_common ath9k_htc; do
-          f=$(find out -name "$m.ko" | head -n 1)
-          if [ -n "$f" ]; then cp "$f" "$GITHUB_WORKSPACE/modules/"; echo "✅ $m.ko"; else echo "⚠️ $m.ko missing"; fi
-        done
-
-        echo "✅ Image: $IMAGE ($(du -h "$IMAGE" | cut -f1))"
-        [ -n "$IMAGE_LZ4" ] && [ -f "$IMAGE_LZ4" ] && echo "✅ Image.lz4: $IMAGE_LZ4 ($(du -h "$IMAGE_LZ4" | cut -f1))"
-        
+        echo "✅ Image: $(du -h $IMAGE | cut -f1)"
+        [ -f "$IMAGE_LZ4" ] && echo "✅ Image.lz4: $(du -h $IMAGE_LZ4 | cut -f1)"
         echo "image=$IMAGE" >> $GITHUB_OUTPUT
         echo "image_lz4=$IMAGE_LZ4" >> $GITHUB_OUTPUT
 
@@ -512,10 +418,6 @@ jobs:
           RESP=$(curl -s -F "file=@${{ steps.package.outputs.image_lz4 }}" "https://$SERVER.gofile.io/uploadFile")
           echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
         fi
-        if [ -f "88XXau.ko" ]; then
-          RESP=$(curl -s -F "file=@88XXau.ko" "https://$SERVER.gofile.io/uploadFile")
-          echo "✅ 88XXau.ko → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-        fi
 
     - name: Upload to GitHub Artifacts
       if: always() && steps.package.outcome == 'success'
@@ -525,8 +427,6 @@ jobs:
         path: |
           ${{ steps.package.outputs.image }}
           ${{ steps.package.outputs.image_lz4 }}
-          88XXau.ko
-          modules/*.ko
         compression-level: 0
 
     # ── 20. Collect patch rejects (always) ─────────────────────────────────────
