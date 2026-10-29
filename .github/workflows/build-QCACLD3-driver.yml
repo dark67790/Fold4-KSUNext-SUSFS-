@@ -91,6 +91,7 @@ jobs:
     # QCACLD3 is in the Samsung source and what its layout looks like.
     - name: "DEBUG: Locate QCACLD3 source"
       run: |
+        set +e   # a failing ls/grep below must not abort the report
         mkdir -p "$GITHUB_WORKSPACE/debug"
         {
           echo "=== top-level workspace ==="
@@ -494,9 +495,18 @@ jobs:
       working-directory: kernel_platform/common
       run: |
         D=drivers/net/wireless/rtw88bp
-        git clone --depth 1 https://github.com/lwfinger/rtw88.git /tmp/rtw88
+        # Pinned: upstream commit d916ef8 (2026-09-02) added device_get_mac_address(),
+        # which doesn't exist on 5.10. Use its parent so the build is reproducible.
+        git clone https://github.com/lwfinger/rtw88.git /tmp/rtw88
+        git -C /tmp/rtw88 checkout d916ef8~1
         mkdir -p $D
         cp /tmp/rtw88/*.c /tmp/rtw88/*.h $D/
+
+        # 5.10 has no 2-arg device_get_mac_address(); stub it so the driver
+        # falls through to eth_random_addr() (fixes main.c:2170 build error)
+        sed -i 's/device_get_mac_address(rtwdev->dev, efuse->addr)/(-ENODEV)/' $D/main.c
+        echo "--- remaining device_get_mac_address refs (should be none):"
+        grep -n 'device_get_mac_address' $D/*.c $D/*.h || echo "none"
 
         cat > $D/Kconfig << 'EOF'
         config RTW88BP
@@ -557,7 +567,7 @@ jobs:
           find kernel_platform/common \( -name '*.rej' -o -name '*.orig' \) 2>/dev/null | head -20
           echo
           echo "=== toolchain ==="
-          CLANG=$(find kernel_platform/prebuilts -type f -name clang -path '*/bin/*' 2>/dev/null | head -1)
+          CLANG=$(find kernel_platform -type f -name clang -path '*/clang-*/bin/*' 2>/dev/null | head -1)
           echo "clang: $CLANG"
           [ -n "$CLANG" ] && "$CLANG" --version
           echo
@@ -574,6 +584,8 @@ jobs:
         mkdir -p "$GITHUB_WORKSPACE/debug"
         export LTO=full
         export KBUILD_MODPOST_WARN=1
+        # keep going after the first compile error so ONE run lists every failing file
+        export MAKEFLAGS=k
         # full log kept in debug/build.log; `|| true` keeps the pipeline going
         # so the grab/debug steps below always run
         bash build_kernel_GKI.sh 2>&1 | tee "$GITHUB_WORKSPACE/debug/build.log" || true
@@ -656,8 +668,9 @@ jobs:
         [ -f "$KOUT/Module.symvers" ] && wc -l "$KOUT/Module.symvers" || echo "⚠️ no Module.symvers in KOUT"
 
         # ---- toolchain -------------------------------------------------------
-        CLANG=$(find kernel_platform/prebuilts -type f -name clang -path '*/bin/*' | head -1)
-        [ -n "$CLANG" ] || { echo "❌ clang not found"; exit 1; }
+        # Samsung's toolchain lives in kernel_platform/prebuilts-master/clang/host/linux-x86/clang-*/bin
+        CLANG=$(find kernel_platform -type f -name clang -path '*/clang-*/bin/*' | head -1)
+        [ -n "$CLANG" ] || { echo "❌ clang not found"; find kernel_platform -maxdepth 4 -type d -name 'clang*' | head; exit 1; }
         export PATH="$(realpath "$(dirname "$CLANG")"):$PATH"
         clang --version
 
