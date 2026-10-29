@@ -1,4 +1,3 @@
-
 name: Build Fold4 Kernel (KSU-Next + SUSFS) — Personal
 
 permissions:
@@ -701,6 +700,19 @@ jobs:
 
         # what Qualcomm's own Android.mk says about chip/profile (for debugging)
         grep -n -E 'WLAN_PROFILE|CHIP|KBUILD_OPTIONS|qca6490|MODNAME' "$WLAN_ROOT/Android.mk" | head -40 || true
+
+        # ---- kernel release string (module vermagic MUST equal it) ------------
+        # Read it from the real Image banner BEFORE any make touches KOUT. Re-running
+        # modules_prepare otherwise regenerates utsrelease.h from the git hash
+        # (that is how the last .ko got vermagic "5.10.209-g8bea92183287").
+        REL=""
+        IMG=$(find out -type f -name Image -path '*gki*' 2>/dev/null | head -1)
+        [ -n "$IMG" ] && REL=$(strings "$IMG" | grep -m1 -oE 'Linux version [^ ]+' | awk '{print $3}')
+        if [ -z "$REL" ]; then
+          REL="5.10.209-android12-9-gki-29539737-abF936BXXSAGYB2"   # fast mode: stock release string
+          echo "ℹ️ no built Image; using stock release string"
+        fi
+        echo "Kernel release the module will be built for: $REL"
         echo "KOUT=$KOUT  KSRC=$KSRC"
         ls -la "$KOUT" | head -30
         [ -f "$KOUT/Module.symvers" ] && wc -l "$KOUT/Module.symvers" || echo "⚠️ no Module.symvers in KOUT"
@@ -714,7 +726,7 @@ jobs:
 
         # CROSS_COMPILE makes clang target aarch64 (without it clang targets x86 and
         # the arm64 headers fail with "unknown register name 'x0' in asm")
-        MK="make -C $KSRC O=$KOUT ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)"
+        MK="make -C $KSRC O=$KOUT ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- KERNELRELEASE=$REL -j$(nproc)"
         [ -n "$FAST" ] && $MK gki_defconfig </dev/null   # fast mode: same defconfig the real build uses
         # avoid the interactive CONFIG_WERROR prompt and warnings-as-errors for vendor code
         "$KSRC/scripts/config" --file "$KOUT/.config" -d WERROR || true
@@ -752,6 +764,22 @@ jobs:
         echo "staged $(find "$QINC" -type f | wc -l) Qualcomm-only headers into $QINC"
         ls -la "$QINC/linux/qcom-iommu-util.h" 2>&1 || find kernel_platform -name 'qcom-iommu-util.h' | head
 
+        # ---- cnss2 + helpers ---------------------------------------------------
+        # Stock wlan.ko depends on: cnss2 cnss_prealloc cnss_nl cnss_utils.
+        # They live in msm-kernel (not GKI). Build them so QCACLD3 gets their symbol
+        # CRCs (otherwise "depends:" is empty and the module can't resolve them).
+        ls "$MSM/drivers/net/wireless" | grep -i cnss || echo "⚠️ no cnss dirs in msm-kernel"
+        for n in cnss_utils cnss_prealloc cnss_genl cnss2; do
+          d="$MSM/drivers/net/wireless/$n"
+          [ -d "$d" ] || { echo "ℹ️ $d missing, skipping"; continue; }
+          $MK -k M="$d" KCFLAGS="-I$QINC -I$QINC/uapi" \
+            CONFIG_CNSS2=m CONFIG_CNSS_UTILS=m CONFIG_CNSS_PREALLOC=m CONFIG_CNSS_GENL=m CONFIG_CNSS_QCA6490=y \
+            KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMS" modules || echo "⚠️ cnss build failed in $d (continuing)"
+          [ -f "$d/Module.symvers" ] && EXTRA_SYMS="$EXTRA_SYMS $d/Module.symvers"
+          find "$d" -name '*.ko' -exec ls -la {} \;
+        done
+        echo "EXTRA_SYMS=$EXTRA_SYMS"
+
         # ---- QCACLD3 itself (waipio / SM8475 → QCA6490) ----------------------
         # -k: keep compiling after the first error so one run lists every missing header/symbol
         $MK -k M="$WLAN_ROOT" \
@@ -762,7 +790,7 @@ jobs:
           WLAN_PROFILE=qca6490 \
           CONFIG_QCA_CLD_WLAN=m \
           CONFIG_CNSS2=y CONFIG_CNSS_QCA6490=y \
-          MODNAME=qca_cld3_qca6490 \
+          MODNAME=wlan \
           KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMS" \
           modules
 
@@ -773,9 +801,14 @@ jobs:
           "$(dirname "$CLANG")/llvm-strip" --strip-debug "$GITHUB_WORKSPACE/modules/$(basename "$KO")" || true
         done
         # symbol sanity: what does the module need that the kernel lacks?
-        for KO in "$GITHUB_WORKSPACE"/modules/qca_cld3*.ko; do
+        for KO in "$GITHUB_WORKSPACE"/modules/wlan.ko; do
           [ -f "$KO" ] || continue
           modinfo "$KO" 2>/dev/null | head -20 || true
+          VM=$(modinfo -F vermagic "$KO" 2>/dev/null)
+          DEPS=$(modinfo -F depends "$KO" 2>/dev/null)
+          ls -la "$KO"
+          case "$VM" in "$REL "*) echo "✅ vermagic matches kernel release";; *) echo "❌ vermagic '$VM' != release '$REL'";; esac
+          echo "depends: '$DEPS'  (stock: cnss2,cfg80211,cnss_prealloc,cnss_nl,cnss_utils)"
         done
 
     # ── 19. Grab Kernel & Driver Artifacts ────────────────────────────────────
@@ -825,9 +858,9 @@ jobs:
         done
 
         # QCACLD3 (built out-of-tree in step 18b, already copied into modules/)
-        ls "$GITHUB_WORKSPACE"/modules/qca_cld3*.ko >/dev/null 2>&1 \
-          && echo "✅ qca_cld3 module present" \
-          || echo "⚠️ qca_cld3 module missing (see debug/qcacld3.log)"
+        ls "$GITHUB_WORKSPACE"/modules/wlan.ko >/dev/null 2>&1 \
+          && echo "✅ wlan.ko (QCACLD3) present" \
+          || echo "⚠️ wlan.ko (QCACLD3) missing (see debug/qcacld3.log)"
 
         # Strip debug symbols from all modules
         STRIP=$(find kernel_platform -type f -name llvm-strip | head -1)
@@ -876,8 +909,8 @@ jobs:
       if: always() && inputs.qcacld3_only
       uses: actions/upload-artifact@v4
       with:
-        name: qca_cld3-only
-        path: modules/qca_cld3*.ko
+        name: wlan-ko-only
+        path: modules/wlan.ko
         if-no-files-found: ignore
         compression-level: 0
 
