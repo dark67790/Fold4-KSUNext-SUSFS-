@@ -715,8 +715,25 @@ jobs:
           echo "ℹ️ no buildable platform dir found (cnss2 may be built into the kernel)"
         fi
 
+        # ---- Qualcomm-only headers --------------------------------------------
+        # QCACLD3 includes vendor headers (linux/qcom-iommu-util.h, soc/qcom/*, ...)
+        # that exist in Samsung's msm-kernel tree but not in the GKI "common" tree.
+        # Stage ONLY headers that GKI doesn't already have, so nothing in GKI is shadowed.
+        MSM="$GITHUB_WORKSPACE/kernel_platform/msm-kernel"
+        QINC="$GITHUB_WORKSPACE/qcom_inc"
+        rm -rf "$QINC"; mkdir -p "$QINC"
+        if [ -d "$MSM/include" ]; then
+          ( cd "$MSM/include" && find . -type f -name '*.h' ) | while read -r f; do
+            [ -e "$KSRC/include/$f" ] || { mkdir -p "$QINC/$(dirname "$f")"; cp "$MSM/include/$f" "$QINC/$f"; }
+          done
+        fi
+        echo "staged $(find "$QINC" -type f | wc -l) Qualcomm-only headers into $QINC"
+        ls -la "$QINC/linux/qcom-iommu-util.h" 2>&1 || find kernel_platform -name 'qcom-iommu-util.h' | head
+
         # ---- QCACLD3 itself (waipio / SM8475 → QCA6490) ----------------------
-        $MK M="$WLAN_ROOT" \
+        # -k: keep compiling after the first error so one run lists every missing header/symbol
+        $MK -k M="$WLAN_ROOT" \
+          KCFLAGS="-I$QINC -I$QINC/uapi" \
           WLAN_ROOT="$WLAN_ROOT" \
           WLAN_COMMON_ROOT=../qca-wifi-host-cmn \
           WLAN_FW_API=../fw-api \
