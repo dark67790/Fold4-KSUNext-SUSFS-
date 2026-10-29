@@ -733,13 +733,16 @@ jobs:
         $MK olddefconfig </dev/null
         $MK modules_prepare </dev/null
 
-        EXTRA_SYMS="$KOUT/Module.symvers"
+        # NOTE: do NOT list $KOUT/Module.symvers here. Kbuild already reads it for external
+        # modules; passing it again makes modpost abort with
+        # "'media_entity_pads_init' exported twice". Only add NEW symvers (cnss etc.).
+        EXTRA_SYMS=""
 
         # ---- optional: platform (cnss2 etc.) first so we get their symbols ----
         PLAT=$(find "$WLAN_TOP" -maxdepth 2 -type d -name platform | head -1)
         if [ -n "$PLAT" ] && { [ -f "$PLAT/Kbuild" ] || [ -f "$PLAT/Makefile" ]; }; then
           echo "--- building wlan platform: $PLAT"
-          $MK M="$PLAT" KBUILD_EXTRA_SYMBOLS="$KOUT/Module.symvers" \
+          $MK M="$PLAT" KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMS" \
             CONFIG_CNSS2=m CONFIG_CNSS_QCA6490=y modules || echo "⚠️ platform build failed (non-fatal)"
           [ -f "$PLAT/Module.symvers" ] && EXTRA_SYMS="$EXTRA_SYMS $PLAT/Module.symvers"
           find "$PLAT" -name '*.ko' -exec ls -la {} \;
@@ -800,6 +803,25 @@ jobs:
           cp "$KO" "$GITHUB_WORKSPACE/modules/" && echo "✅ $KO"
           "$(dirname "$CLANG")/llvm-strip" --strip-debug "$GITHUB_WORKSPACE/modules/$(basename "$KO")" || true
         done
+
+        # ---- remove the git hash ("scmversion=g....") from wlan.ko ---------------
+        # The stock module has no scmversion. The string lives in .modinfo as
+        # NUL-separated entries, so blanking it in place (same length) is safe:
+        # the kernel's modinfo parser skips empty entries.
+        if [ -f "$GITHUB_WORKSPACE/modules/wlan.ko" ]; then
+          python3 - "$GITHUB_WORKSPACE/modules/wlan.ko" << 'PY'
+        import re, sys
+        p = sys.argv[1]
+        b = bytearray(open(p, 'rb').read())
+        n = 0
+        for m in list(re.finditer(rb'scmversion=[^\x00]*', bytes(b))):
+            b[m.start():m.end()] = b'\x00' * (m.end() - m.start())
+            n += 1
+        open(p, 'wb').write(b)
+        print("scrubbed scmversion entries:", n)
+        PY
+          echo "scmversion now: '$(modinfo -F scmversion "$GITHUB_WORKSPACE/modules/wlan.ko" 2>/dev/null)'"
+        fi
         # symbol sanity: what does the module need that the kernel lacks?
         for KO in "$GITHUB_WORKSPACE"/modules/wlan.ko; do
           [ -f "$KO" ] || continue
