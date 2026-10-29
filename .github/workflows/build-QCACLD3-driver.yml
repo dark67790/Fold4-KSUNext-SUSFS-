@@ -508,6 +508,24 @@ jobs:
         echo "--- remaining device_get_mac_address refs (should be none):"
         grep -n 'device_get_mac_address' $D/*.c $D/*.h || echo "none"
 
+        # mac80211 on 5.10 has no ieee80211_purge_tx_queue() (added later);
+        # shim it and force-include the shim into every rtw88bp object
+        cat > $D/compat.h << 'EOF'
+        #ifndef RTW88BP_COMPAT_H
+        #define RTW88BP_COMPAT_H
+        #include <linux/skbuff.h>
+        #include <net/mac80211.h>
+        static inline void ieee80211_purge_tx_queue(struct ieee80211_hw *hw,
+        					    struct sk_buff_head *skbs)
+        {
+        	struct sk_buff *skb;
+
+        	while ((skb = skb_dequeue(skbs)))
+        		ieee80211_free_txskb(hw, skb);
+        }
+        #endif
+        EOF
+
         cat > $D/Kconfig << 'EOF'
         config RTW88BP
         	tristate "Realtek rtw88 backport (RTL8812AU)"
@@ -519,6 +537,7 @@ jobs:
         cat > $D/Makefile << 'EOF'
         ccflags-y += -std=gnu11 -Wno-declaration-after-statement -Wno-error -Wno-unknown-warning-option
         ccflags-y += -DCONFIG_RTW88_LEDS=1 -DCONFIG_RTW88_DEBUG=1 -D__CHECK_ENDIAN__
+        ccflags-y += -include $(srctree)/drivers/net/wireless/rtw88bp/compat.h
 
         obj-$(CONFIG_RTW88BP) += rtw_core.o rtw_usb.o rtw_88xxa.o rtw_8812a.o rtw_8812au.o
 
@@ -674,8 +693,13 @@ jobs:
         export PATH="$(realpath "$(dirname "$CLANG")"):$PATH"
         clang --version
 
-        MK="make -C $KSRC O=$KOUT ARCH=arm64 LLVM=1 LLVM_IAS=1 -j$(nproc)"
-        $MK modules_prepare
+        # CROSS_COMPILE makes clang target aarch64 (without it clang targets x86 and
+        # the arm64 headers fail with "unknown register name 'x0' in asm")
+        MK="make -C $KSRC O=$KOUT ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)"
+        # avoid the interactive CONFIG_WERROR prompt and warnings-as-errors for vendor code
+        "$KSRC/scripts/config" --file "$KOUT/.config" -d WERROR || true
+        $MK olddefconfig </dev/null
+        $MK modules_prepare </dev/null
 
         EXTRA_SYMS="$KOUT/Module.symvers"
 
