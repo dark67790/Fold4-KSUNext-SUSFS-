@@ -1,3 +1,4 @@
+
 name: Build Fold4 Kernel (KSU-Next + SUSFS) — Personal
 
 permissions:
@@ -6,6 +7,11 @@ permissions:
 
 on:
   workflow_dispatch:
+    inputs:
+      qcacld3_only:
+        description: "Fast mode: skip the ~40 min kernel build and only build QCACLD3 (~10 min)"
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -596,6 +602,7 @@ jobs:
 
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
+      if: ${{ !inputs.qcacld3_only }}
       run: |
         mkdir -p out/vendor/qcom/opensource/mmrm-driver/
         touch out/vendor/qcom/opensource/mmrm-driver/Module.symvers
@@ -612,7 +619,7 @@ jobs:
 
     # ── 18a. DEBUG: post-build report ──────────────────────────────────────────
     - name: "DEBUG: Post-build report"
-      if: always()
+      if: always() && !inputs.qcacld3_only
       run: |
         mkdir -p "$GITHUB_WORKSPACE/debug"
         R="$GITHUB_WORKSPACE/debug/02-postbuild.txt"
@@ -679,9 +686,21 @@ jobs:
           d=$(dirname "$v")
           if [ -f "$d/.config" ]; then KOUT=$(realpath "$d"); break; fi
         done
-        [ -n "$KOUT" ] || KOUT=$(realpath "$(dirname "$(find out -name .config -path '*gki*' | head -1)")")
-        [ -d "$KOUT" ] || { echo "❌ could not find kernel O= dir"; find out -maxdepth 4 -name '.config'; exit 1; }
+        FAST=""
+        if [ -z "$KOUT" ]; then
+          CFGF=$(find out -name .config -path '*gki*' 2>/dev/null | head -1)
+          if [ -n "$CFGF" ]; then
+            KOUT=$(realpath "$(dirname "$CFGF")")
+          else
+            echo "ℹ️ no kernel out dir (fast mode): generating a prepared kernel tree"
+            KOUT="$GITHUB_WORKSPACE/out_fast"; mkdir -p "$KOUT"; FAST=1
+          fi
+        fi
         KSRC="$GITHUB_WORKSPACE/kernel_platform/common"
+        export KBUILD_MODPOST_WARN=1   # unresolved vendor symbols become warnings, not errors
+
+        # what Qualcomm's own Android.mk says about chip/profile (for debugging)
+        grep -n -E 'WLAN_PROFILE|CHIP|KBUILD_OPTIONS|qca6490|MODNAME' "$WLAN_ROOT/Android.mk" | head -40 || true
         echo "KOUT=$KOUT  KSRC=$KSRC"
         ls -la "$KOUT" | head -30
         [ -f "$KOUT/Module.symvers" ] && wc -l "$KOUT/Module.symvers" || echo "⚠️ no Module.symvers in KOUT"
@@ -696,6 +715,7 @@ jobs:
         # CROSS_COMPILE makes clang target aarch64 (without it clang targets x86 and
         # the arm64 headers fail with "unknown register name 'x0' in asm")
         MK="make -C $KSRC O=$KOUT ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)"
+        [ -n "$FAST" ] && $MK gki_defconfig </dev/null   # fast mode: same defconfig the real build uses
         # avoid the interactive CONFIG_WERROR prompt and warnings-as-errors for vendor code
         "$KSRC/scripts/config" --file "$KOUT/.config" -d WERROR || true
         $MK olddefconfig </dev/null
@@ -722,11 +742,13 @@ jobs:
         MSM="$GITHUB_WORKSPACE/kernel_platform/msm-kernel"
         QINC="$GITHUB_WORKSPACE/qcom_inc"
         rm -rf "$QINC"; mkdir -p "$QINC"
+        set +x   # keep the log small: no per-file tracing for ~460 copies
         if [ -d "$MSM/include" ]; then
           ( cd "$MSM/include" && find . -type f -name '*.h' ) | while read -r f; do
             [ -e "$KSRC/include/$f" ] || { mkdir -p "$QINC/$(dirname "$f")"; cp "$MSM/include/$f" "$QINC/$f"; }
           done
         fi
+        set -x
         echo "staged $(find "$QINC" -type f | wc -l) Qualcomm-only headers into $QINC"
         ls -la "$QINC/linux/qcom-iommu-util.h" 2>&1 || find kernel_platform -name 'qcom-iommu-util.h' | head
 
@@ -736,8 +758,8 @@ jobs:
           KCFLAGS="-I$QINC -I$QINC/uapi" \
           WLAN_ROOT="$WLAN_ROOT" \
           WLAN_COMMON_ROOT=../qca-wifi-host-cmn \
-          WLAN_FW_API=../fw-api \
-          WLAN_PROFILE=default \
+          WLAN_FW_API="$WLAN_TOP/fw-api" \
+          WLAN_PROFILE=qca6490 \
           CONFIG_QCA_CLD_WLAN=m \
           CONFIG_CNSS2=y CONFIG_CNSS_QCA6490=y \
           MODNAME=qca_cld3_qca6490 \
@@ -748,6 +770,7 @@ jobs:
         find "$WLAN_TOP" -name '*.ko' -exec ls -la {} \;
         for KO in $(find "$WLAN_TOP" -name 'qca_cld3*.ko' -o -name 'wlan.ko' | head -5); do
           cp "$KO" "$GITHUB_WORKSPACE/modules/" && echo "✅ $KO"
+          "$(dirname "$CLANG")/llvm-strip" --strip-debug "$GITHUB_WORKSPACE/modules/$(basename "$KO")" || true
         done
         # symbol sanity: what does the module need that the kernel lacks?
         for KO in "$GITHUB_WORKSPACE"/modules/qca_cld3*.ko; do
@@ -757,7 +780,7 @@ jobs:
 
     # ── 19. Grab Kernel & Driver Artifacts ────────────────────────────────────
     - name: Grab Kernel Image
-      if: always()
+      if: always() && !inputs.qcacld3_only
       id: package
       run: |
         GKI_DIST="out/msm-waipio-waipio-gki/gki_kernel/dist"
@@ -821,20 +844,21 @@ jobs:
         echo "image_lz4=$IMAGE_LZ4" >> $GITHUB_OUTPUT
 
     - name: Upload to GoFile
-      if: always() && steps.package.outcome == 'success'
+      if: always() && (steps.package.outcome == 'success' || inputs.qcacld3_only)
       run: |
         SERVER=$(curl -s https://api.gofile.io/servers | \
           python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['servers'][0]['name'])")
-        RESP=$(curl -s -F "file=@${{ steps.package.outputs.image }}" "https://$SERVER.gofile.io/uploadFile")
-        echo "✅ Image → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-        if [ -f "${{ steps.package.outputs.image_lz4 }}" ]; then
-          RESP=$(curl -s -F "file=@${{ steps.package.outputs.image_lz4 }}" "https://$SERVER.gofile.io/uploadFile")
-          echo "✅ Image.lz4 → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-        fi
-        if [ -f "88XXau.ko" ]; then
-          RESP=$(curl -s -F "file=@88XXau.ko" "https://$SERVER.gofile.io/uploadFile")
-          echo "✅ 88XXau.ko → $(echo $RESP | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])")"
-        fi
+        up() {
+          local f="$1" label="$2" resp
+          [ -n "$f" ] && [ -f "$f" ] || return 0
+          resp=$(curl -s -F "file=@$f" "https://$SERVER.gofile.io/uploadFile")
+          echo "✅ $label → $(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['downloadPage'])" 2>/dev/null || echo "upload failed: $resp")"
+        }
+        up "${{ steps.package.outputs.image }}"     "Image"
+        up "${{ steps.package.outputs.image_lz4 }}" "Image.lz4"
+        up "88XXau.ko"                              "88XXau.ko"
+        # QCACLD3 (Qualcomm wlan) driver(s)
+        for f in modules/qca_cld3*.ko modules/wlan.ko; do up "$f" "$(basename "$f")"; done
 
     - name: Upload to GitHub Artifacts
       if: always() && steps.package.outcome == 'success'
@@ -846,6 +870,15 @@ jobs:
           ${{ steps.package.outputs.image_lz4 }}
           88XXau.ko
           modules/*.ko
+        compression-level: 0
+
+    - name: Upload QCACLD3 module (fast mode)
+      if: always() && inputs.qcacld3_only
+      uses: actions/upload-artifact@v4
+      with:
+        name: qca_cld3-only
+        path: modules/qca_cld3*.ko
+        if-no-files-found: ignore
         compression-level: 0
 
     # ── 20. Collect patch rejects (always) ─────────────────────────────────────
