@@ -865,6 +865,21 @@ jobs:
         grep -rn -E 'FEATURE_RUNTIME_PM|WLAN_FEATURE_TSF\b|WLAN_FEATURE_TSF |CONFIG_WLAN_FEATURE_TSF|PM_QOS' \
           "$WLAN_ROOT/Kbuild" "$WLAN_ROOT/Kconfig" "$WLAN_ROOT/configs" "$WLAN_ROOT/Android.mk" 2>/dev/null \
           | sed -E 's#/home/runner/work/[^/]+/[^/]+/##' | cut -c1-220 | head -60
+        echo "----- Kbuild conditions enclosing FEATURE_RUNTIME_PM / WLAN_SYNC_TSF -----"
+        python3 - "$WLAN_ROOT/Kbuild" << 'PY'
+        import re, sys
+        lines = open(sys.argv[1], errors='replace').read().split('\n')
+        stack = []
+        for i, l in enumerate(lines, 1):
+            t = l.strip()
+            if re.match(r'(ifeq|ifneq|ifdef|ifndef)\b', t): stack.append((i, t))
+            elif re.match(r'else\b', t) and stack: stack[-1] = (i, t + '   [else of ' + stack[-1][1] + ']')
+            elif re.match(r'endif\b', t) and stack: stack.pop()
+            if 'DFEATURE_RUNTIME_PM' in l or 'CONFIG_WLAN_SYNC_TSF' in l:
+                print(f"line {i}: {t}")
+                for n, c in stack: print(f"     guarded by line {n}: {c}")
+        PY
+        grep -rn -E 'CONFIG_WLAN_SYNC_TSF|CONFIG_FEATURE_RUNTIME_PM' "$WLAN_ROOT/configs" 2>/dev/null | sed -E 's#/home/runner/work/[^/]+/[^/]+/##' | head -20
         echo "===== end ====="
         set -x
 
@@ -896,6 +911,16 @@ jobs:
         # Android.mk single-chip build: DYNAMIC_SINGLE_CHIP stays EMPTY (setting it makes the
         # driver ask for wlan/qca_cld/wlan/WCNSS_qcom_cfg.ini -> probe fails) and WLAN_PROFILE=default.
         build_wlan default || true
+        if find "$WLAN_TOP" -name wlan.ko | grep -q .; then
+          cp "$(find "$WLAN_TOP" -name wlan.ko | head -1)" /tmp/wlan_base.ko
+          # experiment: also enable TSF sync (stock has wma_set_tsf_auto_report); keep it only if it builds
+          KB_BASE=("${KB[@]}"); KB+=(CONFIG_WLAN_SYNC_TSF=y)
+          build_wlan default || true
+          if ! find "$WLAN_TOP" -name wlan.ko | grep -q .; then
+            echo "⚠️ build with CONFIG_WLAN_SYNC_TSF=y failed - using the plain build"
+            KB=("${KB_BASE[@]}"); mkdir -p "$WLAN_ROOT"; cp /tmp/wlan_base.ko "$WLAN_ROOT/wlan.ko"
+          fi
+        fi
         if ! find "$WLAN_TOP" -name wlan.ko | grep -q .; then
           echo "⚠️ profile 'default' did not produce wlan.ko - retrying with the qca6490 profile"
           build_wlan qca6490 || true
