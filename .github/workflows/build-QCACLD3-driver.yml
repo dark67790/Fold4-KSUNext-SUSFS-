@@ -860,6 +860,14 @@ jobs:
         echo "kernel-config options passed to the wlan build:"; printf '   %s\n' "${KB[@]}"
         set -x
 
+        set +x
+        echo "===== where FEATURE_RUNTIME_PM / TSF / PM_QOS get enabled ====="
+        grep -rn -E 'FEATURE_RUNTIME_PM|WLAN_FEATURE_TSF\b|WLAN_FEATURE_TSF |CONFIG_WLAN_FEATURE_TSF|PM_QOS' \
+          "$WLAN_ROOT/Kbuild" "$WLAN_ROOT/Kconfig" "$WLAN_ROOT/configs" "$WLAN_ROOT/Android.mk" 2>/dev/null \
+          | sed -E 's#/home/runner/work/[^/]+/[^/]+/##' | cut -c1-220 | head -60
+        echo "===== end ====="
+        set -x
+
         # ---- QCACLD3 itself, with the SAME options as Qualcomm's Android.mk --------
         # From Android.mk: WLAN_ROOT, WLAN_COMMON_ROOT=cmn, WLAN_COMMON_INC, WLAN_FW_API,
         # WLAN_PROFILE (= device name "wlan" for a single-chip build), DYNAMIC_SINGLE_CHIP,
