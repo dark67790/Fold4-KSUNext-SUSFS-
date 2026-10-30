@@ -832,12 +832,13 @@ jobs:
         build_wlan default || true
         if find "$WLAN_TOP" -name wlan.ko | grep -q .; then
           cp "$(find "$WLAN_TOP" -name wlan.ko | head -1)" /tmp/wlan_base.ko
-          # extras stock has: runtime PM (Kbuild:3110 needs CONFIG_BUS_AUTO_SUSPEND=y) and TSF sync.
+          # extras stock has: runtime PM (Kbuild:3110 needs CONFIG_BUS_AUTO_SUSPEND=y), TSF sync and
+          # TSF uplink delay (Kbuild:3667 -> WLAN_FEATURE_TSF_UPLINK_DELAY, needed by wma_set_tsf_auto_report).
           # Kept only if the build still succeeds.
-          KB_BASE=("${KB[@]}"); KB+=(CONFIG_BUS_AUTO_SUSPEND=y CONFIG_WLAN_SYNC_TSF=y)
+          KB_BASE=("${KB[@]}"); KB+=(CONFIG_BUS_AUTO_SUSPEND=y CONFIG_WLAN_SYNC_TSF=y CONFIG_WLAN_TSF_UPLINK_DELAY=y)
           build_wlan default || true
           if ! find "$WLAN_TOP" -name wlan.ko | grep -q .; then
-            echo "⚠️ build with BUS_AUTO_SUSPEND/SYNC_TSF failed - using the plain build"
+            echo "⚠️ build with BUS_AUTO_SUSPEND/SYNC_TSF/TSF_UPLINK_DELAY failed - using the plain build"
             KB=("${KB_BASE[@]}"); mkdir -p "$WLAN_ROOT"; cp /tmp/wlan_base.ko "$WLAN_ROOT/wlan.ko"
           fi
         fi
