@@ -91,51 +91,6 @@ jobs:
         tar -xzf toolchain.tar.gz -C kernel_platform/
         rm toolchain.tar.gz
 
-    # ── 5b. DEBUG: where is the wlan source? ───────────────────────────────────
-    # Runs right after extraction so we know BEFORE the 1h+ build whether
-    # QCACLD3 is in the Samsung source and what its layout looks like.
-    - name: "DEBUG: Locate QCACLD3 source"
-      run: |
-        set +e   # a failing ls/grep below must not abort the report
-        mkdir -p "$GITHUB_WORKSPACE/debug"
-        {
-          echo "=== top-level workspace ==="
-          ls -la "$GITHUB_WORKSPACE"
-          echo
-          echo "=== vendor/qcom/opensource (workspace root) ==="
-          ls -la "$GITHUB_WORKSPACE/vendor/qcom/opensource" 2>&1 || true
-          echo
-          echo "=== every qcacld-3.0 / cnss2 / qca-wifi-host-cmn / fw-api dir ==="
-          find "$GITHUB_WORKSPACE" \( -type d -name 'qcacld-3.0' -o -type d -name 'cnss2' \
-            -o -type d -name 'qca-wifi-host-cmn' -o -type d -name 'fw-api' \) \
-            -not -path '*/.git/*' 2>/dev/null
-          echo
-          echo "=== wlan dir contents ==="
-          for d in $(find "$GITHUB_WORKSPACE" -type d -path '*opensource/wlan' -not -path '*/.git/*' 2>/dev/null); do
-            echo "--- $d"; ls -la "$d"
-          done
-          echo
-          echo "=== qcacld-3.0 Kbuild / Kconfig / Makefile / configs ==="
-          Q=$(find "$GITHUB_WORKSPACE" -type d -name 'qcacld-3.0' -not -path '*/.git/*' | head -1)
-          if [ -n "$Q" ]; then
-            ls -la "$Q"
-            echo "--- configs:"; ls "$Q/configs" 2>&1 | head -60
-            echo "--- Kbuild head:"; head -80 "$Q/Kbuild" 2>&1
-            echo "--- Android.mk / BUILD / *.bzl:"; ls "$Q"/Android.mk "$Q"/BUILD* "$Q"/*.bzl 2>&1
-            echo "--- waipio / kalama / qca6490 mentions in configs:"
-            grep -rIl -i -E 'waipio|qca6490|wcn6855' "$Q/configs" 2>/dev/null | head -20
-          else
-            echo "❌ qcacld-3.0 NOT FOUND anywhere in the Samsung source"
-          fi
-          echo
-          echo "=== Samsung build script: does it already build wlan? ==="
-          grep -n -i -E 'wlan|qca|cnss|vendor/qcom' "$GITHUB_WORKSPACE/build_kernel_GKI.sh" 2>&1 | head -40
-          echo
-          echo "=== build.config / defconfig hints for wlan ==="
-          grep -rn -i -E 'qca_cld|cnss|wlan' "$GITHUB_WORKSPACE"/kernel_platform/common/arch/arm64/configs/*.config 2>/dev/null | head -30
-          grep -rn -i -E 'qca_cld|cnss|wlan' "$GITHUB_WORKSPACE/kernel_platform/common/arch/arm64/configs/gki_defconfig" 2>/dev/null | head -30
-        } 2>&1 | tee "$GITHUB_WORKSPACE/debug/00-wlan-source.txt"
-
     # ── 6. Patch build target ──────────────────────────────────────────────────
     - name: Patch Build Target
       run: |
@@ -465,11 +420,6 @@ jobs:
         echo "CONFIG_88XXAU=m" >> "$GKI_DEFCONFIG"
 
     # ── 17c. AR9271 (ath9k_htc) as modules ─────────────────────────────────────
-    - name: Show Samsung wifi config (info only)
-      run: |
-        find kernel_platform -type f -path '*arm64/configs*' \( -name '*.config' -o -name '*defconfig' \) \
-          -exec grep -HE '^CONFIG_(CFG80211|MAC80211|NL80211_TESTMODE)[A-Z0-9_]*=' {} + 2>/dev/null | head -80 || true
-
     - name: Add ath9k_htc (AR9271)
       working-directory: kernel_platform/common
       run: |
@@ -567,37 +517,6 @@ jobs:
         $C --module CONFIG_RTW88BP
         $C --set-str CONFIG_EXTRA_FIRMWARE "ath9k_htc/htc_9271-1.4.0.fw rtw88/rtw8812a_fw.bin"
         $C --set-str CONFIG_EXTRA_FIRMWARE_DIR "$F"
-
-    # ── 17e. DEBUG: pre-build sanity check ─────────────────────────────────────
-    # Cheap checks that run BEFORE the long build so we catch obvious problems.
-    - name: "DEBUG: Pre-build sanity"
-      run: |
-        mkdir -p "$GITHUB_WORKSPACE/debug"
-        {
-          echo "=== date / disk / mem ==="
-          date; df -h /; free -h
-          echo
-          echo "=== final defconfig tail (what we appended) ==="
-          tail -n 120 "$GKI_DEFCONFIG"
-          echo
-          echo "=== duplicate CONFIG_ keys in defconfig (last one wins) ==="
-          grep -E '^CONFIG_[A-Za-z0-9_]+=' "$GKI_DEFCONFIG" | cut -d= -f1 | sort | uniq -d
-          echo
-          echo "=== EXTRA_FIRMWARE lines ==="
-          grep -n 'EXTRA_FIRMWARE' "$GKI_DEFCONFIG"
-          ls -laR "$GITHUB_WORKSPACE/fwdir" 2>&1
-          echo
-          echo "=== leftover .rej / .orig anywhere in kernel tree ==="
-          find kernel_platform/common \( -name '*.rej' -o -name '*.orig' \) 2>/dev/null | head -20
-          echo
-          echo "=== toolchain ==="
-          CLANG=$(find kernel_platform -type f -name clang -path '*/clang-*/bin/*' 2>/dev/null | head -1)
-          echo "clang: $CLANG"
-          [ -n "$CLANG" ] && "$CLANG" --version
-          echo
-          echo "=== build script target ==="
-          grep -n 'BUILD_TARGET' build_kernel_GKI.sh | head
-        } 2>&1 | tee "$GITHUB_WORKSPACE/debug/01-prebuild.txt"
 
     # ── 18. Build ──────────────────────────────────────────────────────────────
     - name: Build Kernel
@@ -879,7 +798,7 @@ jobs:
                 print(f"line {i}: {t}")
                 for n, c in stack: print(f"     guarded by line {n}: {c}")
         PY
-        grep -rn -E 'CONFIG_WLAN_SYNC_TSF|CONFIG_FEATURE_RUNTIME_PM' "$WLAN_ROOT/configs" 2>/dev/null | sed -E 's#/home/runner/work/[^/]+/[^/]+/##' | head -20
+        grep -rn -E 'BUS_AUTO_SUSPEND|TSF_UPLINK_DELAY' "$WLAN_ROOT/Kbuild" "$WLAN_ROOT/Kconfig" "$WLAN_ROOT/configs/default_defconfig" "$WLAN_ROOT/core" 2>/dev/null | grep -v '#if' | cut -c1-200 | head -20; grep -rn -E 'CONFIG_WLAN_SYNC_TSF' "$WLAN_ROOT/configs/default_defconfig" 2>/dev/null | sed -E 's#/home/runner/work/[^/]+/[^/]+/##' | head -20
         echo "===== end ====="
         set -x
 
@@ -913,11 +832,12 @@ jobs:
         build_wlan default || true
         if find "$WLAN_TOP" -name wlan.ko | grep -q .; then
           cp "$(find "$WLAN_TOP" -name wlan.ko | head -1)" /tmp/wlan_base.ko
-          # experiment: also enable TSF sync (stock has wma_set_tsf_auto_report); keep it only if it builds
-          KB_BASE=("${KB[@]}"); KB+=(CONFIG_WLAN_SYNC_TSF=y)
+          # extras stock has: runtime PM (Kbuild:3110 needs CONFIG_BUS_AUTO_SUSPEND=y) and TSF sync.
+          # Kept only if the build still succeeds.
+          KB_BASE=("${KB[@]}"); KB+=(CONFIG_BUS_AUTO_SUSPEND=y CONFIG_WLAN_SYNC_TSF=y)
           build_wlan default || true
           if ! find "$WLAN_TOP" -name wlan.ko | grep -q .; then
-            echo "⚠️ build with CONFIG_WLAN_SYNC_TSF=y failed - using the plain build"
+            echo "⚠️ build with BUS_AUTO_SUSPEND/SYNC_TSF failed - using the plain build"
             KB=("${KB_BASE[@]}"); mkdir -p "$WLAN_ROOT"; cp /tmp/wlan_base.ko "$WLAN_ROOT/wlan.ko"
           fi
         fi
