@@ -91,6 +91,19 @@ jobs:
         tar -xzf toolchain.tar.gz -C kernel_platform/
         rm toolchain.tar.gz
 
+    # ── 5b. Packet injection patch (QCACLD3) ───────────────────────────────────
+    - name: Apply packet injection patch (QCACLD3)
+      run: |
+        python3 patches/apply_injection_patch.py
+
+    - name: Upload injection patch report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: injection-patch-report
+        path: injection_patch_report.log
+        if-no-files-found: ignore
+
     # ── 6. Patch build target ──────────────────────────────────────────────────
     - name: Patch Build Target
       run: |
