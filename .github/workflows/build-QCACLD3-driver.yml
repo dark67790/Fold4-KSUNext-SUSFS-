@@ -876,7 +876,6 @@ jobs:
             WLAN_COMMON_INC="$WLAN_ROOT/cmn" \
             WLAN_FW_API="$WLAN_TOP/fw-api" \
             WLAN_PROFILE="$1" \
-            DYNAMIC_SINGLE_CHIP=wlan \
             MODNAME=wlan \
             DEVNAME=wlan \
             BOARD_PLATFORM=taro \
@@ -886,9 +885,11 @@ jobs:
             KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMS" \
             modules
         }
-        build_wlan wlan || true        # profile Android.mk selects for a single-chip build
+        # Android.mk single-chip build: DYNAMIC_SINGLE_CHIP stays EMPTY (setting it makes the
+        # driver ask for wlan/qca_cld/wlan/WCNSS_qcom_cfg.ini -> probe fails) and WLAN_PROFILE=default.
+        build_wlan default || true
         if ! find "$WLAN_TOP" -name wlan.ko | grep -q .; then
-          echo "⚠️ profile 'wlan' did not produce wlan.ko - retrying with the qca6490 profile"
+          echo "⚠️ profile 'default' did not produce wlan.ko - retrying with the qca6490 profile"
           build_wlan qca6490 || true
         fi
 
@@ -898,6 +899,14 @@ jobs:
           cp "$KO" "$GITHUB_WORKSPACE/modules/" && echo "✅ $KO"
           "$(dirname "$CLANG")/llvm-strip" --strip-debug "$GITHUB_WORKSPACE/modules/$(basename "$KO")" || true
         done
+
+        # ---- INI path check: stock asks for wlan/qca_cld/WCNSS_qcom_cfg.ini ------------
+        if [ -f "$GITHUB_WORKSPACE/modules/wlan.ko" ]; then
+          set +x
+          echo "INI path strings in our wlan.ko:"; strings "$GITHUB_WORKSPACE/modules/wlan.ko" | grep -i 'WCNSS_qcom_cfg' | sort -u
+          if strings "$GITHUB_WORKSPACE/modules/wlan.ko" | grep -q 'qca_cld/wlan/WCNSS'; then echo "❌ INI path still has extra wlan/ folder"; else echo "✅ INI path matches stock"; fi
+          set -x
+        fi
 
         # ---- remove the git hash ("scmversion=g....") from wlan.ko ---------------
         # The stock module has no scmversion. The string lives in .modinfo as
