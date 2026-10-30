@@ -701,8 +701,19 @@ jobs:
         # ---- DEBUG: how does Qualcomm's own build configure this driver? --------------
         # (these are cheap; they tell us exactly what Samsung's build passes)
         set +x
-        echo "===== Android.mk (KBUILD_OPTIONS etc.) ====="
-        grep -n -E 'KBUILD|WLAN_|MODNAME|CHIP|BOARD_PLATFORM|LOCAL_MODULE|make ' "$WLAN_ROOT/Android.mk" | head -60
+        echo "===== Android.mk (how Samsung/Qualcomm build it) ====="
+        sed -n '20,175p' "$WLAN_ROOT/Android.mk"
+        echo "===== where the Samsung tree sets the driver chip / state-control path ====="
+        grep -rIn -E 'WIFI_DRIVER_STATE_CTRL_PARAM|TARGET_WLAN_CHIP|WLAN_PLATFORM_KBUILD_OPTIONS|WLAN_CFG_USE_DEFAULT|WLAN_KBUILD_OPTIONS' \
+          "$GITHUB_WORKSPACE"/vendor "$GITHUB_WORKSPACE"/build_*.sh "$GITHUB_WORKSPACE"/kernel_platform/msm-kernel/*.mk \
+          "$GITHUB_WORKSPACE"/kernel_platform/msm-kernel/Makefile "$GITHUB_WORKSPACE"/kernel_platform/msm-kernel/BUILD* 2>/dev/null \
+          | grep -v '/qcacld-3.0/Android.mk' | cut -c1-240 | head -40
+        echo "===== msm-kernel waipio config fragments that mention CNSS/WLAN ====="
+        find "$GITHUB_WORKSPACE/kernel_platform/msm-kernel/arch/arm64/configs" -type f 2>/dev/null | grep -i waipio | head
+        find "$GITHUB_WORKSPACE/kernel_platform/msm-kernel/arch/arm64/configs" -type f 2>/dev/null | grep -i waipio \
+          | xargs grep -h -E '^CONFIG_(CNSS|ICNSS|QCA_|WLAN|CLD_|LITHIUM|BERYLLIUM|PCI_MSM|PLD_|HIF_|WCNSS)' 2>/dev/null | sort -u | head -60
+        echo "===== wlan_defconfig (the profile Android.mk picks for a single-chip build) ====="
+        sed -n 1,60p "$WLAN_ROOT/configs/wlan_defconfig" 2>/dev/null
         echo "===== Kbuild: every KERNEL_BUILD / MODNAME branch ====="
         grep -n -E 'KERNEL_BUILD|MODNAME|BOARD_PLATFORM' "$WLAN_ROOT/Kbuild" | head -60
         echo "===== Kconfig ====="
@@ -710,14 +721,20 @@ jobs:
         echo "===== default_defconfig: platform/chip/pm/state related lines ====="
         grep -n -i -E 'BOARD_PLATFORM|CNSS|RUNTIME_PM|STATE|ARCH_|PCI|QCA6490|WCN|ifeq|ifneq|endif' "$WLAN_ROOT/configs/default_defconfig" | head -80
         echo "===== which #if guards /dev/wlan (wlan_hdd_state_ctrl_param) in the source? ====="
-        python3 - "$WLAN_ROOT" << 'PY'
+        python3 - "$WLAN_TOP" << 'PY'
         import os, re, sys
-        root = sys.argv[1]
+        root = sys.argv[1]   # wlan top dir: covers qcacld-3.0 AND qca-wifi-host-cmn
         targets = {
             "wlan_hdd_state_ctrl_param_write": "/dev/wlan state control",
             "hif_pm_runtime_get": "runtime PM",
+            "hif_runtime_suspend": "runtime PM suspend",
+            "wlan_hdd_pld_runtime_suspend": "HDD runtime PM",
             "ptt_sock_activate_svc": "PTT socket",
             "send_msg_to_cld80211": "cld80211 oem",
+            "cnss_diag_cmd_handler": "cnss diag",
+            "wma_set_tsf_auto_report": "TSF auto report",
+            "wlan_hdd_pm_qos_notify": "PM QoS",
+            "spectral_scan_msg_handler": "spectral",
         }
         found = {}
         for dp, _, fs in os.walk(root):
@@ -818,37 +835,62 @@ jobs:
         echo "staged $(find "$QINC" -type f | wc -l) Qualcomm-only headers into $QINC"
         ls -la "$QINC/linux/qcom-iommu-util.h" 2>&1 || find kernel_platform -name 'qcom-iommu-util.h' | head
 
-        # ---- cnss2 + helpers ---------------------------------------------------
-        # Stock wlan.ko depends on: cnss2 cnss_prealloc cnss_nl cnss_utils.
-        # They live in msm-kernel (not GKI). Build them so QCACLD3 gets their symbol
-        # CRCs (otherwise "depends:" is empty and the module can't resolve them).
-        ls "$MSM/drivers/net/wireless" | grep -i cnss || echo "⚠️ no cnss dirs in msm-kernel"
-        for n in cnss_utils cnss_prealloc cnss_genl cnss2; do
-          d="$MSM/drivers/net/wireless/$n"
-          [ -d "$d" ] || { echo "ℹ️ $d missing, skipping"; continue; }
-          $MK -k M="$d" KCFLAGS="-I$QINC -I$QINC/uapi" \
-            CONFIG_CNSS2=m CONFIG_CNSS_UTILS=m CONFIG_CNSS_PREALLOC=m CONFIG_CNSS_GENL=m CONFIG_CNSS_QCA6490=y \
-            KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMS" modules || echo "⚠️ cnss build failed in $d (continuing)"
-          [ -f "$d/Module.symvers" ] && EXTRA_SYMS="$EXTRA_SYMS $d/Module.symvers"
-          find "$d" -name '*.ko' -exec ls -la {} \;
-        done
-        echo "EXTRA_SYMS=$EXTRA_SYMS"
+        # NOTE: cnss2/cnss_utils/... are NOT rebuilt here. They fail to build outside Samsung's
+        # full tree (missing wlan_firmware_service_v01.h etc.) and are not needed: modpost skips
+        # symbols it can't resolve (KBUILD_MODPOST_WARN=1) and the kernel loads such a module
+        # without version checks for those symbols; they bind to the stock cnss modules at
+        # insmod. (This only costs the "depends:" line, which init does not use.)
+        EXTRA_SYMS=""
 
-        # ---- QCACLD3 itself (waipio / SM8475 → QCA6490) ----------------------
-        # -k: keep compiling after the first error so one run lists every missing header/symbol
-        # MATCH SAMSUNG'S BUILD. Evidence from stock.ko: its source paths go through the
-        # "cmn/" symlink (qcacld-3.0/cmn/...), which is what Qualcomm's Kbuild uses in
-        # KERNEL_BUILD mode (MODNAME NOT set). Setting MODNAME switches Kbuild to its
-        # "external module" mode, which compiles OUT the /dev/wlan state-control device
-        # (wlan_hdd_state_ctrl_param_*) the Wi-Fi HAL needs, and runtime PM.
-        # So: no MODNAME, no WLAN_PROFILE/WLAN_COMMON_ROOT/WLAN_FW_API overrides, and no
-        # CONFIG_CNSS* guesses. Only the module switch and where the source lives.
-        $MK -k M="$WLAN_ROOT" \
-          KCFLAGS="-I$QINC -I$QINC/uapi" \
-          WLAN_ROOT="$WLAN_ROOT" \
-          CONFIG_QCA_CLD_WLAN=m \
-          KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMS" \
-          modules
+        # ---- chip/feature options: same as Samsung's kernel passes to the wlan build ----
+        # Android.mk gets these as WLAN_PLATFORM_KBUILD_OPTIONS = CONFIG_* values from the
+        # kernel defconfig. Harvest them from msm-kernel's waipio config fragments.
+        set +x
+        HARV="$GITHUB_WORKSPACE/wlan_kconfig_opts.txt"; : > "$HARV"
+        mapfile -t CFGF < <(find "$MSM/arch/arm64/configs" -type f 2>/dev/null | grep -i waipio)
+        echo "waipio config files: ${CFGF[*]:-none}"
+        if [ ${#CFGF[@]} -gt 0 ]; then
+          cat "${CFGF[@]}" | grep -E '^CONFIG_(CNSS|ICNSS|QCA_|WLAN|CLD_|LITHIUM|BERYLLIUM|PCI_MSM|PLD_|HIF_|WCNSS)[A-Za-z0-9_]*=[ym]$' \
+            | awk -F= '{v[$1]=$2} END{for(k in v) print k"="v[k]}' | sort > "$HARV" || true
+        fi
+        # no chip selected by the kernel config? fall back to what compiled before (QCA6490)
+        grep -q -E '^CONFIG_CNSS_(QCA|KIWI)' "$HARV" || echo "CONFIG_CNSS_QCA6490=y" >> "$HARV"
+        grep -q -E '^CONFIG_CNSS2=' "$HARV" || echo "CONFIG_CNSS2=y" >> "$HARV"
+        mapfile -t KB < "$HARV"
+        echo "kernel-config options passed to the wlan build:"; printf '   %s\n' "${KB[@]}"
+        set -x
+
+        # ---- QCACLD3 itself, with the SAME options as Qualcomm's Android.mk --------
+        # From Android.mk: WLAN_ROOT, WLAN_COMMON_ROOT=cmn, WLAN_COMMON_INC, WLAN_FW_API,
+        # WLAN_PROFILE (= device name "wlan" for a single-chip build), DYNAMIC_SINGLE_CHIP,
+        # MODNAME=wlan, DEVNAME, BOARD_PLATFORM, WLAN_CTRL_NAME (<- creates /dev/wlan!), WLAN_SELECT.
+        # WLAN_CTRL_NAME is the one the Wi-Fi HAL needs: wlan_hdd_state_ctrl_param_* is
+        # compiled under "#ifdef WLAN_CTRL_NAME" and I had never passed it.
+        # -k keeps compiling after the first error so one run lists every problem.
+        build_wlan() {   # $1 = WLAN_PROFILE
+          find "$WLAN_TOP" -name '*.ko' -delete 2>/dev/null
+          $MK -k M="$WLAN_ROOT" \
+            KCFLAGS="-I$QINC -I$QINC/uapi" \
+            WLAN_ROOT="$WLAN_ROOT" \
+            WLAN_COMMON_ROOT=cmn \
+            WLAN_COMMON_INC="$WLAN_ROOT/cmn" \
+            WLAN_FW_API="$WLAN_TOP/fw-api" \
+            WLAN_PROFILE="$1" \
+            DYNAMIC_SINGLE_CHIP=wlan \
+            MODNAME=wlan \
+            DEVNAME=wlan \
+            BOARD_PLATFORM=taro \
+            WLAN_CTRL_NAME=wlan \
+            CONFIG_QCA_CLD_WLAN=m \
+            "${KB[@]}" \
+            KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMS" \
+            modules
+        }
+        build_wlan wlan || true        # profile Android.mk selects for a single-chip build
+        if ! find "$WLAN_TOP" -name wlan.ko | grep -q .; then
+          echo "⚠️ profile 'wlan' did not produce wlan.ko - retrying with the qca6490 profile"
+          build_wlan qca6490 || true
+        fi
 
         # ---- collect ---------------------------------------------------------
         find "$WLAN_TOP" -name '*.ko' -exec ls -la {} \;
