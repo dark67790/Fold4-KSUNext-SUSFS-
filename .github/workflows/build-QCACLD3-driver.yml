@@ -924,11 +924,12 @@ jobs:
           set +x
           echo "===== feature check vs stock ====="
           MISS=0
+          NMLIST=$(mktemp); llvm-nm "$GITHUB_WORKSPACE/modules/wlan.ko" 2>/dev/null | awk '{print $NF}' | sed -E 's/\.[0-9]+$//' | sort -u > "$NMLIST"
           for sym in wlan_hdd_state_ctrl_param_open wlan_hdd_state_ctrl_param_write wlan_hdd_state_ctrl_param_release \
                      hif_pm_runtime_get hif_pm_runtime_put hif_runtime_suspend hdd_pld_runtime_suspend_cb pld_pcie_runtime_suspend \
                      ptt_sock_activate_svc send_msg_to_cld80211 cnss_diag_cmd_handler wma_set_tsf_auto_report \
                      wlan_hdd_pm_qos_notify spectral_scan_msg_handler; do
-            if llvm-nm "$GITHUB_WORKSPACE/modules/wlan.ko" 2>/dev/null | awk '{print $NF}' | sed -E 's/\.[0-9]+$//' | grep -qx "$sym"; then
+            if grep -qx "$sym" "$NMLIST"; then
               echo "✅ $sym"
             else
               echo "❌ $sym  (present in stock, missing here)"; MISS=$((MISS+1))
