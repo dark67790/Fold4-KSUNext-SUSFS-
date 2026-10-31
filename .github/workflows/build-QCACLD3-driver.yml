@@ -131,6 +131,61 @@ jobs:
           || { echo "❌ fixup did not take effect"; exit 1; }
         echo "✅ desc_id==0 misroute removed from wma_mgmt.c"
 
+    # ── 5d. Diagnostic markers for the wlan0 down/up crash (QCACLD3) ───────────
+    # Unconditional pr_emerg() markers (not rate-limited, not gated by con_mode)
+    # at two points that are reached on every ip-link down regardless of mode:
+    #   1. every management-frame TX completion (desc_id + status), so we see
+    #      the full completion sequence leading up to the crash
+    #   2. the first unconditional line reached inside __hdd_stop() after the
+    #      patch's own monitor-mode-only blocks, so we know __hdd_stop was
+    #      actually entered on this specific ip-link-down call
+    # Whichever marker is LAST in the next kmsg capture tells us exactly how
+    # far execution got before the device died.
+    - name: Add diagnostic markers for wlan0 down/up crash (QCACLD3)
+      run: |
+        set -e
+        python3 - <<'PYEOF'
+        import re, sys, pathlib
+        import subprocess, os
+
+        def find_one(suffix):
+            out = subprocess.run(
+                ["find", os.environ["GITHUB_WORKSPACE"], "-type", "f",
+                 "-path", f"*{suffix}", "-not", "-path", "*/.git/*"],
+                capture_output=True, text=True, check=True
+            ).stdout.strip().splitlines()
+            if not hits_ok(out):
+                sys.exit(f"❌ expected exactly 1 match for *{suffix}, found {len(out)}: {out}")
+            return out[0]
+
+        def hits_ok(lst):
+            return len(lst) == 1
+
+        def apply(path, pattern, replacement, flags=0, expect=1):
+            text = pathlib.Path(path).read_text()
+            matches = len(re.findall(pattern, text, flags))
+            if matches != expect:
+                sys.exit(f"❌ {path}: expected {expect} match(es) for pattern, found {matches}")
+            new_text = re.sub(pattern, replacement, text, flags=flags)
+            pathlib.Path(path).write_text(new_text)
+            print(f"✅ patched {path} ({matches} match)")
+
+        mgmt_c = find_one("/qcacld-3.0/core/wma/src/wma_mgmt.c")
+        apply(
+            mgmt_c,
+            r'(wma_debug\("status: %s wmi_desc_id: %d",\s*\n\s*wma_get_status_str\(status\), desc_id\);\n)',
+            r'\1\tpr_emerg("WMA_MGMT_TX_COMP desc_id=%u status=%u\\n", desc_id, status);\n',
+        )
+
+        main_c = find_one("/qcacld-3.0/core/hdd/src/wlan_hdd_main.c")
+        apply(
+            main_c,
+            r'(\n[ \t]*/\* Nothing to be done if the interface is not opened \*/\n)',
+            r'\n\tpr_emerg("HDD_STOP_REACHED if=%s\\n", dev->name);\1',
+        )
+        PYEOF
+        echo "✅ diagnostic markers added"
+
     # ── 6. Patch build target ──────────────────────────────────────────────────
     - name: Patch Build Target
       run: |
