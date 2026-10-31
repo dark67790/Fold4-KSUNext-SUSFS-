@@ -104,6 +104,33 @@ jobs:
         path: injection_patch_report.log
         if-no-files-found: ignore
 
+    # ── 5c. Fix desc_id==0 mgmt-completion misroute (QCACLD3) ──────────────────
+    # wma_process_mgmt_tx_completion() in wma_mgmt.c treats desc_id==0 as an
+    # injection completion, but real injection desc_ids start at 0x2000
+    # (WMA_INJECTION_DESC_ID_BASE) — desc_id 0 is just the ordinary case for a
+    # ordinary mgmt frame (e.g. the deauth ip-link-down sends). That branch
+    # skips mgmt_txrx_get_nbuf()/wma_mgmt_unmap_buf(), corrupting the mgmt_txrx
+    # descriptor pool instead of releasing it, which shows up seconds later as
+    # a silent crash/reboot on wlan0 down/up. This step removes the bad
+    # `desc_id == 0 ||` clause from the real extracted source after the patch
+    # above has applied, without touching the .patch file or the apply script.
+    - name: Fix desc_id==0 injection-completion misroute (QCACLD3)
+      run: |
+        set -e
+        F=$(find "$GITHUB_WORKSPACE" -type f -path '*/qcacld-3.0/core/wma/src/wma_mgmt.c' \
+          -not -path '*/.git/*' | head -1)
+        [ -n "$F" ] || { echo "❌ wma_mgmt.c not found after packet injection patch"; exit 1; }
+        echo "Patching: $F"
+
+        grep -n 'if (desc_id == 0 || WMA_IS_INJECTION_DESC_ID(desc_id)) {' "$F" \
+          || { echo "❌ expected desc_id==0 line not found — injection patch content may have changed, skipping blind"; exit 1; }
+
+        sed -i 's/if (desc_id == 0 || WMA_IS_INJECTION_DESC_ID(desc_id)) {/if (WMA_IS_INJECTION_DESC_ID(desc_id)) {/' "$F"
+
+        grep -n 'if (WMA_IS_INJECTION_DESC_ID(desc_id)) {' "$F" \
+          || { echo "❌ fixup did not take effect"; exit 1; }
+        echo "✅ desc_id==0 misroute removed from wma_mgmt.c"
+
     # ── 6. Patch build target ──────────────────────────────────────────────────
     - name: Patch Build Target
       run: |
