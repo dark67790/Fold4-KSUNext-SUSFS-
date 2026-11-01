@@ -183,6 +183,36 @@ jobs:
             r'(\n[ \t]*/\* Nothing to be done if the interface is not opened \*/\n)',
             r'\n\tpr_emerg("HDD_STOP_REACHED if=%s\\n", dev->name);\1',
         )
+
+        # wma_deinit_injection_queue() runs unconditionally from wma_close(),
+        # which this device's idle-shutdown path actually invokes on a plain
+        # ip-link-down. It calls qdf_delayed_work_stop_sync() on a reaper that
+        # has been re-arming itself every 3s since driver load, and on the
+        # queue's delayed work — if wma_close() happens to run on the same
+        # workqueue those are scheduled on, stop_sync() waiting for them to
+        # finish is a self-deadlock. Bracket each stop call so we see exactly
+        # which BEFORE marker fires with no matching AFTER marker.
+        inj_c = find_one("/qcacld-3.0/core/wma/src/wma_frame_inject.c")
+        apply(
+            inj_c,
+            r'(\twma_debug\("Deinitializing WMA injection queue"\);\n)',
+            r'\1\tpr_emerg("WMA_DEINIT_ENTER\\n");\n',
+        )
+        apply(
+            inj_c,
+            r'(\tqdf_cancel_work\(&ctx->queue_work\);\n\tqdf_flush_work\(&ctx->queue_work\);\n)',
+            r'\tpr_emerg("WMA_DEINIT_BEFORE_QUEUE_CANCEL\\n");\n\1\tpr_emerg("WMA_DEINIT_AFTER_QUEUE_CANCEL\\n");\n',
+        )
+        apply(
+            inj_c,
+            r'(\tqdf_delayed_work_stop_sync\(&ctx->delayed_work\);\n)',
+            r'\tpr_emerg("WMA_DEINIT_BEFORE_DELAYED_STOP\\n");\n\1\tpr_emerg("WMA_DEINIT_AFTER_DELAYED_STOP\\n");\n',
+        )
+        apply(
+            inj_c,
+            r'(\tqdf_delayed_work_stop_sync\(&ctx->reaper_work\);\n)',
+            r'\tpr_emerg("WMA_DEINIT_BEFORE_REAPER_STOP\\n");\n\1\tpr_emerg("WMA_DEINIT_AFTER_REAPER_STOP\\n");\n',
+        )
         PYEOF
         echo "✅ diagnostic markers added"
 
