@@ -203,14 +203,17 @@ jobs:
             r'(\tqdf_cancel_work\(&ctx->queue_work\);\n\tqdf_flush_work\(&ctx->queue_work\);\n)',
             r'\tpr_emerg("WMA_DEINIT_BEFORE_QUEUE_CANCEL\\n");\n\1\tpr_emerg("WMA_DEINIT_AFTER_QUEUE_CANCEL\\n");\n',
         )
+        # anchored on the preceding comment too: qdf_delayed_work_stop_sync(&ctx->delayed_work)
+        # appears a second time, in the test-only wma_flush_injection_queue(), which would
+        # otherwise make this match twice.
         apply(
             inj_c,
-            r'(\tqdf_delayed_work_stop_sync\(&ctx->delayed_work\);\n)',
+            r'(\t/\* Cancel and destroy delayed work \*/\n\tqdf_delayed_work_stop_sync\(&ctx->delayed_work\);\n)',
             r'\tpr_emerg("WMA_DEINIT_BEFORE_DELAYED_STOP\\n");\n\1\tpr_emerg("WMA_DEINIT_AFTER_DELAYED_STOP\\n");\n',
         )
         apply(
             inj_c,
-            r'(\tqdf_delayed_work_stop_sync\(&ctx->reaper_work\);\n)',
+            r'(\t/\* Stop and destroy reaper timer \*/\n\tqdf_delayed_work_stop_sync\(&ctx->reaper_work\);\n)',
             r'\tpr_emerg("WMA_DEINIT_BEFORE_REAPER_STOP\\n");\n\1\tpr_emerg("WMA_DEINIT_AFTER_REAPER_STOP\\n");\n',
         )
         PYEOF
