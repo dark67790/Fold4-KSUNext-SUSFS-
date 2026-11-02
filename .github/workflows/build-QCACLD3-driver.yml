@@ -302,6 +302,85 @@ jobs:
         PYEOF
         echo "✅ cds_close diagnostic markers added"
 
+    # ── 5f. Fix: restore stock mgmt-over-WMI gating for global mgmt tx pool (QCACLD3) ──
+    # panic_dmesg4.txt (STA mode 0, no monitor mode involved) shows the crash is
+    # NOT inside cds_close()/wma_close() at all -- none of the CDS_* or
+    # WMA_DEINIT_* markers ever fire. The log always dies cold right after
+    # "htc_stop: stopping hif layer" and never reaches "htc_stop: flush
+    # endpoints Tx lookup queue" (stock, untouched htc_stop() -> hif_stop()).
+    # The SAME capture also contains an earlier, fully successful htc_stop()
+    # sequence (an old driver instance unloading before this one even loaded)
+    # that prints both lines ~3ms apart -- so hif_stop() can complete fine on
+    # this hardware. Something state-related, introduced by the patch, breaks
+    # it later.
+    #
+    # Tracing patches/07_packet_injection.patch itself (not a guess) shows it
+    # touches core/dp/txrx/ol_txrx_flow_control.c and removes the stock
+    # "if (!ol_tx_get_is_mgmt_over_wmi_enabled())" guard around creating the
+    # legacy global management TX descriptor pool (pdev->mgmt_pool), making
+    # that pool unconditional. Registration happens once at pdev attach
+    # (driver load) for EVERY con_mode, not just monitor mode -- matching
+    # "crashes in mode 0 too". Worse: ol_tx_set_desc_global_pool_size() (pure
+    # stock, never touched by the patch) only grows the total descriptor
+    # budget by TX_FLOW_MGMT_POOL_SIZE when mgmt is NOT over WMI -- so on
+    # hardware where it IS over WMI (modern WCN6850/qca6490 almost certainly
+    # is), the patch now creates a pool that steals descriptors from a budget
+    # that was never resized for it, and leaves it registered for the life of
+    # the driver.
+    #
+    # This restores the exact stock gating on both register and deregister.
+    # The added pr_emerg also reports whether mgmt_over_wmi was actually 1 on
+    # this hardware: if it prints 0 next capture, this fix is a no-op and the
+    # hang is elsewhere.
+    - name: Fix global mgmt pool unconditional creation (QCACLD3)
+      run: |
+        set -e
+        python3 - <<'PYEOF'
+        import re, sys, subprocess, os
+
+        def find_one(suffix):
+            out = subprocess.run(
+                ["find", os.environ["GITHUB_WORKSPACE"], "-type", "f",
+                 "-path", f"*{suffix}", "-not", "-path", "*/.git/*"],
+                capture_output=True, text=True, check=True
+            ).stdout.strip().splitlines()
+            if len(out) != 1:
+                sys.exit(f"❌ expected exactly 1 match for *{suffix}, found {len(out)}: {out}")
+            return out[0]
+
+        def apply(path, pattern, replacement, flags=0, expect=1):
+            text = pathlib_read(path)
+            matches = len(re.findall(pattern, text, flags))
+            if matches != expect:
+                sys.exit(f"❌ {path}: expected {expect} match(es) for pattern, found {matches}\npattern: {pattern}")
+            new_text = re.sub(pattern, replacement, text, flags=flags, count=expect if expect else 0)
+            pathlib_write(path, new_text)
+            print(f"✅ patched {path} ({matches} match) :: {pattern[:60]}")
+
+        def pathlib_read(path):
+            with open(path, "r") as f:
+                return f.read()
+
+        def pathlib_write(path, text):
+            with open(path, "w") as f:
+                f.write(text)
+
+        flowctl_c = find_one("/qcacld-3.0/core/dp/txrx/ol_txrx_flow_control.c")
+
+        steps = [
+            (r'(\tmgmt_over_wmi = ol_tx_get_is_mgmt_over_wmi_enabled\(\);\n\tol_txrx_info\("flowctl init: is_mgmt_over_wmi_enabled=%u", mgmt_over_wmi\);\n\n\t/\*\n\t \* Keep a global mgmt pool even when mgmt-over-WMI is enabled so the\n\t \* legacy cdp_mgmt_send_ext fallback can still allocate descriptors\.\n\t \*/\n)(\tol_tx_register_global_mgmt_pool\(pdev\);\n)',
+             r'\1\tif (!mgmt_over_wmi) {\n\t\tpr_emerg("FLOWCTL_MGMT_POOL_CREATE mgmt_over_wmi=0\\n");\n\t\tol_tx_register_global_mgmt_pool(pdev);\n\t} else {\n\t\tpr_emerg("FLOWCTL_MGMT_POOL_SKIPPED mgmt_over_wmi=1 stock_gate_restored\\n");\n\t}\n'),
+            (r'(\tint i = 0;\n\tstruct ol_tx_flow_pool_t \*pool = NULL;\n\tstruct cdp_soc_t \*soc;\n\n)(\tol_tx_deregister_global_mgmt_pool\(pdev\);\n)',
+             r'\1\tif (!ol_tx_get_is_mgmt_over_wmi_enabled()) {\n\t\tpr_emerg("FLOWCTL_MGMT_POOL_DESTROY stock_gate_restored\\n");\n\t\tol_tx_deregister_global_mgmt_pool(pdev);\n\t}\n'),
+        ]
+
+        for pat, repl in steps:
+            apply(flowctl_c, pat, repl)
+
+        print("✅ stock mgmt-over-WMI gating restored")
+        PYEOF
+        echo "✅ global mgmt pool gating fix applied"
+
     # ── 6. Patch build target ──────────────────────────────────────────────────
     - name: Patch Build Target
       run: |
